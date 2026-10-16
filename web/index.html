@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <!--
+    Privacy guarantee, enforced by the browser: this page may only load its own
+    files and may not connect to any other site. connect-src 'self' also allows
+    nothing but this site's own static files (there is no server to receive data).
+  -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; connect-src 'self'; img-src 'self' blob: data:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'self' blob:">
+  <meta name="referrer" content="no-referrer">
+  <title>PDF Tools</title>
+  <meta name="description" content="Compress, merge, split and convert PDFs and images. Runs entirely in your browser: files never leave your device.">
+  <meta name="theme-color" content="#f6f5f1" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#16181c" media="(prefers-color-scheme: dark)">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon-180.png">
+  <link rel="stylesheet" href="app.css">
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <header class="top">
+    <a href="#" class="brand"><img src="icon.svg" alt="" width="28" height="28"> PDF Tools</a>
+    <span class="badge" title="Nothing is uploaded. Everything happens in this browser tab.">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+      Files stay on your device
+    </span>
+  </header>
+  <main id="app">
+    <noscript><p>This page needs JavaScript to run the tools inside your browser.</p></noscript>
+  </main>
+  <footer class="foot">
+    <p>Built on open-source <a href="https://github.com/qpdf/qpdf" rel="noopener">qpdf</a>,
+      <a href="https://github.com/mozilla/pdf.js" rel="noopener">pdf.js</a> and
+      <a href="https://github.com/hoppergee/heic-to" rel="noopener">libheif</a>.
+      No accounts, no tracking, no uploads.</p>
+  </footer>
+</body>
+</html>
