@@ -7,6 +7,7 @@ Private replacements for the "free online PDF tools" websites, in two forms:
   installed like an app, and works offline after the first visit.
 - **A command-line tool** (`pdftool.py`) for the same jobs on a Mac/PC.
 
+  Link to use the site: https://zarif2142.github.io/pdf-tools/
 Both are thin layers over well-known open-source engines:
 
 | Engine | Used for |
