@@ -1,0 +1,4 @@
+#!/bin/sh
+# Runs pdftool.py with its own virtualenv, from any folder.
+DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+exec "$DIR/.venv/bin/python" -I "$DIR/pdftool.py" "$@"

@@ -1,0 +1,5 @@
+img2pdf==0.6.3
+pikepdf==10.17.0
+pillow==12.3.0
+pillow_heif==1.8.1
+pypdfium2==5.14.0
