@@ -53,3 +53,28 @@ export async function convertImage(file, type, quality, maxSize) {
   if (blob.type !== t.mime) throw new Error(`This browser can't save ${t.label} files.`);
   return blob;
 }
+
+export async function deflate(bytes) {
+  const s = new Blob([bytes]).stream().pipeThrough(new CompressionStream("deflate"));
+  return new Uint8Array(await new Response(s).arrayBuffer());
+}
+
+// Canvas -> PDF image in qpdf JSON form: lossless colour plus, where the
+// canvas has transparency (signatures), a soft mask.
+export async function canvasToPdfImage(canvas) {
+  const { width: w, height: h } = canvas;
+  const px = canvas.getContext("2d").getImageData(0, 0, w, h).data;
+  const color = new Uint8Array(w * h * 3);
+  const alpha = new Uint8Array(w * h);
+  let opaque = true;
+  for (let i = 0, p = 0; i < px.length; i += 4, p++) {
+    color[p * 3] = px[i]; color[p * 3 + 1] = px[i + 1]; color[p * 3 + 2] = px[i + 2];
+    alpha[p] = px[i + 3];
+    if (px[i + 3] !== 255) opaque = false;
+  }
+  const dict = (cs) => ({ "/Type": "/XObject", "/Subtype": "/Image", "/Width": w, "/Height": h,
+    "/ColorSpace": cs, "/BitsPerComponent": 8, "/Filter": "/FlateDecode" });
+  const out = { dict: dict("/DeviceRGB"), data: await deflate(color) };
+  if (!opaque) out.smask = { dict: dict("/DeviceGray"), data: await deflate(alpha) };
+  return out;
+}

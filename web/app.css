@@ -43,6 +43,9 @@
 
 * { box-sizing: border-box; }
 
+/* components set display:flex etc.; the hidden attribute must still win */
+[hidden] { display: none !important; }
+
 html { -webkit-text-size-adjust: 100%; }
 
 body {
@@ -367,4 +370,228 @@ table.info td { overflow-wrap: anywhere; }
 
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; scroll-behavior: auto !important; }
+}
+
+/* ------------------------------------------------------------ fill & sign */
+
+@font-face { font-family: "PDF Helvetica"; src: url("vendor/fonts/arimo.woff2") format("woff2"); font-display: block; }
+@font-face { font-family: "Dancing Script"; src: url("vendor/fonts/dancing-script.woff2") format("woff2"); }
+@font-face { font-family: "Great Vibes"; src: url("vendor/fonts/great-vibes.woff2") format("woff2"); }
+@font-face { font-family: "Homemade Apple"; src: url("vendor/fonts/homemade-apple.woff2") format("woff2"); }
+
+.sign-editor { display: flex; flex-direction: column; gap: 12px; }
+
+.sign-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+}
+.tool-group, .sel-controls { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.sel-controls[hidden], .sel-controls [hidden] { display: none; }
+.sel-controls select { min-height: 38px; padding: 4px 8px; }
+
+.tool-btn {
+  font: inherit;
+  font-weight: 600;
+  min-height: 40px;
+  padding: 6px 12px;
+  border-radius: 9px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+.tool-btn:hover { border-color: var(--accent); }
+.tool-btn[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+
+.swatch {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 2px solid var(--line);
+  cursor: pointer;
+  padding: 0;
+}
+.swatch.black { background: #000; }
+.swatch.blue { background: rgb(13 51 153); }
+.swatch.on { outline: 3px solid var(--accent); outline-offset: 2px; }
+
+.sign-hint { margin: 0; }
+
+.sign-pages { display: flex; flex-direction: column; align-items: center; gap: 28px; padding: 30px 8px 8px; margin: 0 -8px; overflow-x: clip; }
+
+.sign-page {
+  position: relative;
+  width: 100%;
+  max-width: 900px;
+  background: #fff;
+  box-shadow: 0 0 0 1px var(--line), var(--shadow);
+  touch-action: pan-x pan-y pinch-zoom;
+}
+.sign-canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+.field-layer, .item-layer { position: absolute; inset: 0; }
+.field-layer { z-index: 1; }
+.item-layer { z-index: 2; pointer-events: none; }
+.page-label { position: absolute; bottom: -22px; right: 0; font-size: 12px; color: var(--muted); }
+.sign-editor.placing .sign-page { cursor: crosshair; }
+
+/* the PDF's own form fields (scoped so the site's input styles don't apply) */
+.sign-page .field {
+  position: absolute;
+  margin: 0;
+  padding: 0 2px;
+  border: 1px solid rgba(47, 91, 211, .45);
+  border-radius: 2px;
+  background: rgba(47, 91, 211, .1);
+  color: #000;
+  font-family: "PDF Helvetica", Helvetica, Arial, sans-serif;
+  min-height: 0;
+  line-height: 1.15;
+  resize: none;
+  max-width: none;
+}
+.sign-page .field:focus { outline: 2px solid var(--accent); background: rgba(255, 255, 255, .9); }
+.sign-page .field:disabled { background: transparent; border-color: transparent; }
+.sign-page select.field { padding: 0; appearance: auto; }
+.sign-page textarea.field { padding: 1px 2px; overflow: auto; }
+.sign-page .field.comb { font-family: ui-monospace, Menlo, monospace; }
+.toggle { display: flex; align-items: center; justify-content: center; cursor: pointer; padding: 0; }
+.toggle[aria-checked="true"]::after { content: "✓"; font-weight: 700; font-size: 1.1em; line-height: 1; }
+.toggle.radio { border-radius: 50%; }
+.toggle.radio[aria-checked="true"]::after { content: "●"; font-size: .8em; }
+.sig-field {
+  position: absolute;
+  border: 1.5px dashed var(--accent);
+  background: rgba(47, 91, 211, .06);
+  color: var(--accent);
+  font: 600 12px system-ui, sans-serif;
+  cursor: pointer;
+  z-index: 1;
+}
+
+/* things placed on the page */
+.sign-item {
+  position: absolute;
+  pointer-events: auto;
+  touch-action: none;
+  user-select: none;
+}
+.sign-item.selected { outline: 1.5px dashed var(--accent); outline-offset: 2px; }
+.sign-item:not(.text) { cursor: move; }
+.item-text {
+  /* must match fill-core.js: no padding, line height 1.2 */
+  font-family: "PDF Helvetica", Helvetica, Arial, sans-serif;
+  line-height: 1.2;
+  padding: 0;
+  margin: 0;
+  white-space: pre;
+  min-width: 1.5em;
+  outline: none;
+  cursor: text;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.sign-item.text:not(.selected) .item-text:empty { outline: 1px dashed var(--accent); }
+.grip {
+  position: absolute;
+  left: 0;
+  top: -30px;
+  width: 26px;
+  height: 26px;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  cursor: move;
+  font-size: 14px;
+}
+.sign-item.selected .grip { display: flex; }
+.mark, .mark svg, .sign-item img { display: block; width: 100%; height: 100%; }
+.resize-handle {
+  position: absolute;
+  right: -9px;
+  bottom: -9px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid #fff;
+  cursor: nwse-resize;
+  display: none;
+}
+.sign-item.selected .resize-handle { display: block; }
+
+.sign-footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 20;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+}
+
+/* signature dialog */
+.sig-dialog {
+  width: min(560px, calc(100vw - 24px));
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 16px;
+  background: var(--surface);
+  color: var(--text);
+}
+.sig-dialog::backdrop { background: rgba(0, 0, 0, .45); }
+.sig-dialog > * + * { margin-top: 12px; }
+.sig-head, .sig-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.sig-tabs { display: flex; gap: 4px; background: var(--surface-2); padding: 4px; border-radius: 10px; }
+.sig-tab { flex: 1; font: inherit; font-weight: 600; padding: 8px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); cursor: pointer; }
+.sig-tab[aria-selected="true"] { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
+.sig-panel { display: flex; flex-direction: column; gap: 10px; }
+.sig-panel[hidden] { display: none; }
+.sig-pad {
+  width: 100%;
+  height: 200px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  touch-action: none;
+  cursor: crosshair;
+  background-image: linear-gradient(transparent calc(100% - 50px), #ccc calc(100% - 50px), #ccc calc(100% - 49px), transparent calc(100% - 49px));
+}
+.sig-fonts { display: flex; flex-direction: column; gap: 6px; }
+.sig-preview { font-size: 26px; line-height: 1.5; padding-right: 10px; color: #000; overflow: hidden; white-space: nowrap; }
+.sig-dancing { font-family: "Dancing Script", cursive; }
+.sig-vibes { font-family: "Great Vibes", cursive; font-size: 30px; }
+.sig-apple { font-family: "Homemade Apple", cursive; font-size: 19px; }
+.sig-upload-preview { min-height: 80px; display: flex; align-items: center; justify-content: center; color: var(--muted);
+  background: repeating-conic-gradient(#eee 0 25%, #fff 0 50%) 0 0 / 16px 16px; border-radius: 10px; }
+.sig-upload-preview img { max-width: 100%; max-height: 160px; }
+
+@media (max-width: 600px) {
+  .sign-toolbar { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding: 6px; gap: 6px; border-radius: 10px; }
+  .sign-toolbar::-webkit-scrollbar { display: none; }
+  .tool-group, .sel-controls { flex-wrap: nowrap; gap: 4px; }
+  .tool-btn { min-height: 38px; padding: 4px 10px; white-space: nowrap; }
+  .swatch { width: 26px; height: 26px; flex: none; }
+  .sign-footer { flex-wrap: nowrap; padding: 8px 10px; }
+  .sign-footer .hint { display: none; }
+  .sign-footer .btn.primary { flex: none; }
 }

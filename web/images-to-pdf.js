@@ -5,7 +5,7 @@
 // WEBP are stored losslessly (Flate). HEIC/AVIF/lossy WEBP photos become
 // high-quality JPEGs. The result is then normalised and checked by qpdf.
 
-import { decodeToBitmap } from "./images.js";
+import { decodeToBitmap, deflate } from "./images.js";
 
 const enc = new TextEncoder();
 const PAGE_SIZES = { a4: [595.28, 841.89], letter: [612, 792] };
@@ -47,11 +47,6 @@ function exifOrientation(b, t) {
 }
 
 // ------------------------------------------------------- image encoding ---
-
-async function deflate(bytes) {
-  const s = new Blob([bytes]).stream().pipeThrough(new CompressionStream("deflate"));
-  return new Uint8Array(await new Response(s).arrayBuffer());
-}
 
 function isLossyWebp(b) {
   return b.length > 16 && String.fromCharCode(...b.subarray(8, 12)) === "WEBP" &&

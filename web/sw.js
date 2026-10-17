@@ -15,6 +15,8 @@ const CORE = [
   "images-to-pdf.js",
   "zip.js",
   "worker.js",
+  "fill-core.js",
+  "fill-sign.js",
   "manifest.webmanifest",
   "icon.svg",
   "icon-192.png",
@@ -26,6 +28,10 @@ const CORE = [
   "vendor/pdfjs/wasm/jbig2.wasm",
   "vendor/pdfjs/wasm/qcms_bg.wasm",
   "vendor/heic-to/heic-to.js",
+  "vendor/fonts/arimo.woff2",
+  "vendor/fonts/dancing-script.woff2",
+  "vendor/fonts/great-vibes.woff2",
+  "vendor/fonts/homemade-apple.woff2",
 ];
 
 self.addEventListener("install", (e) => {

@@ -15,14 +15,30 @@ Both are thin layers over well-known open-source engines:
 | [qpdf](https://github.com/qpdf/qpdf) | merge, split, pages, rotate, passwords, metadata, compression (website: qpdf 12 compiled to WebAssembly; CLI: via [pikepdf](https://github.com/pikepdf/pikepdf)) |
 | [pdf.js](https://github.com/mozilla/pdf.js) (Mozilla) / [PDFium](https://pdfium.googlesource.com/pdfium/) (Google) | rendering pages, independent check of every output |
 | [libheif](https://github.com/strukturag/libheif) via [heic-to](https://github.com/hoppergee/heic-to) / [pillow-heif](https://github.com/bigcat88/pillow_heif) | iPhone HEIC photos |
+| [Fontsource](https://fontsource.org) fonts (Arimo, Dancing Script, Great Vibes, Homemade Apple) | text preview and typed signatures |
 | The browser's own image codecs / [Pillow](https://python-pillow.org) | JPG, PNG, WEBP |
 
 ## Website
 
-Tools: compress (including "get it under N MB"), merge, organize pages (reorder /
-rotate / delete with thumbnails), split, images to PDF, PDF to images, convert
-images (HEIC/PNG/WEBP/JPG, resize), add password (AES-256), remove password,
-remove hidden metadata, PDF info.
+Tools: fill & sign, compress (including "get it under N MB"), merge, organize
+pages (reorder / rotate / delete with thumbnails), split, images to PDF, PDF to
+images, convert images (HEIC/PNG/WEBP/JPG, resize), add password (AES-256),
+remove password, remove hidden metadata, PDF info.
+
+### Fill & sign
+
+- Fills the PDF's own form fields (text, multi-line, checkboxes, radio buttons,
+  dropdowns, comb boxes) and draws their visible text itself in standard
+  Helvetica, so nothing can come out blank because of a form's embedded font.
+- Places text, dates, check marks, crosses and signatures anywhere on any page,
+  including rotated and cropped pages. Signatures can be drawn, typed in a
+  handwriting font, or taken from a photo with the paper background removed.
+- Additions go in a new content layer on top of each page; the original page
+  content is never edited. "Lock answers in place" flattens the form.
+- What you see while editing is what you get: the editor previews text in Arimo,
+  which has the same letter widths as Helvetica.
+- Logic for the PDF changes is in `web/fill-core.js` (plain JS, testable in Node);
+  the editor is `web/fill-sign.js`.
 
 ### Why it's private
 

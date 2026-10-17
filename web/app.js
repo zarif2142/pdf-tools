@@ -5,6 +5,7 @@
 import { imagesToPdf } from "./images-to-pdf.js";
 import { convertImage, OUTPUT_TYPES } from "./images.js";
 import { makeZip } from "./zip.js";
+import { fillSignView, disposeFillSign } from "./fill-sign.js";
 
 // ------------------------------------------------------------- helpers ---
 
@@ -134,12 +135,14 @@ const ICONS = {
   img2pdf: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/>',
   convert: '<path d="M4 7h13l-3-3M20 17H7l3 3"/>',
   info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/>',
+  sign: '<path d="M3 17c3-1 4-6 6-6s1 5 3 5 2-3 4-3 2 2 5 2"/><path d="M4 21h16"/>',
 };
 
 const icon = (name) => h("span", { class: "icon", "aria-hidden": "true",
   html: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${ICONS[name]}</svg>` });
 
 const TOOLS = [
+  { id: "sign", title: "Fill & sign", blurb: "Fill in forms, add a signature, text, dates and check marks.", kind: "pdf" },
   { id: "compress", title: "Compress PDF", blurb: "Make a PDF smaller, e.g. to fit an upload limit.", kind: "pdf" },
   { id: "merge", title: "Merge PDFs", blurb: "Combine several PDFs into one, in the order you choose.", kind: "pdf", multiple: true },
   { id: "organize", title: "Organize pages", blurb: "Reorder, rotate or remove pages.", kind: "pdf" },
@@ -169,6 +172,7 @@ function resetState() {
   if (thumbDoc) thumbDoc.doc.then((d) => d.close()).catch(() => {});
   thumbDoc = null;
   thumbCache = new Map();
+  disposeFillSign();
   items = [];
   opts = {};
   busy = false;
@@ -400,6 +404,7 @@ async function guard(fn) {
 function optionsFor() {
   const one = readyItems()[0];
   switch (tool.id) {
+    case "sign": return fillSignView(one, signCtx);
     case "compress": return compressOptions(one);
     case "merge": return mergeOptions();
     case "organize": return organizeOptions(one);
@@ -414,6 +419,11 @@ function optionsFor() {
   }
   return [];
 }
+
+// --- fill & sign (editor lives in fill-sign.js)
+
+const signCtx = { h, job, openPdfjs, pdfjs, setStatus, doubleCheck, stem, guard,
+  showResults: (...a) => showResults(...a), isBusy: () => busy };
 
 // --- compress
 

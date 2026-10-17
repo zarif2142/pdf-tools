@@ -5,6 +5,7 @@
 // filesystem; nothing is ever written to disk or sent over the network.
 
 importScripts("vendor/qpdf/qpdf.js"); // defines the global factory `Module`
+importScripts("fill-core.js"); // defines FillCore
 
 let wasmModule = null;
 
@@ -423,9 +424,66 @@ async function compress({ data, password, steps, targetBytes, lossless }) {
   };
 }
 
+// ---------------------------------------------------------- fill & sign ---
+
+// fieldChanges / pageItems come from the editor; see fill-core.js for details.
+async function fillSign({ data, password, fieldChanges, pageItems, flatten }) {
+  const q = await newQpdf();
+  q.FS.writeFile("/in.pdf", data);
+  progress("Reading the PDF…", 0.1);
+  ok(q.run([...pwArgs(password), "/in.pdf", "--json-output", "--json-key=qpdf", "--json-key=pages",
+    "--json-stream-data=none", "/list.json"]), "Reading the PDF");
+  const j = JSON.parse(q.FS.readFile("/list.json", { encoding: "utf8" }));
+
+  // image data goes to files that the JSON update points at
+  q.FS.mkdir("/img");
+  let k = 0;
+  for (const pi of pageItems) {
+    for (const item of pi.items) {
+      if (item.type !== "image") continue;
+      const im = item.image;
+      im.file = `/img/${k++}`;
+      q.FS.writeFile(im.file, im.data);
+      delete im.data;
+      if (im.smask) {
+        im.smask.file = `/img/${k++}`;
+        q.FS.writeFile(im.smask.file, im.smask.data);
+        delete im.smask.data;
+      }
+    }
+  }
+
+  let update;
+  try {
+    update = FillCore.buildFillUpdate({ header: j.qpdf[0], objects: j.qpdf[1], pages: j.pages, fieldChanges, pageItems });
+  } catch (e) {
+    if (e.userFacing) fail(e.message);
+    throw e;
+  }
+  q.FS.writeFile("/u.json", JSON.stringify(update));
+  progress("Saving…", 0.5);
+  const out = flatten ? "/mid.pdf" : "/out.pdf";
+  ok(q.run([...pwArgs(password), "/in.pdf", "--update-from-json=/u.json", out]), "Saving");
+  if (flatten) {
+    // bake form fields into the page so the answers can't be changed later
+    ok(q.run([...pwArgs(password), "/mid.pdf", "--flatten-annotations=all", "/flat.pdf"]), "Flattening");
+    ok(q.run([...pwArgs(password), "/flat.pdf", "--json-output", "--json-key=qpdf", "--json-key=pages",
+      "--json-stream-data=none", "/flat.json"]), "Flattening");
+    const fj = JSON.parse(q.FS.readFile("/flat.json", { encoding: "utf8" }));
+    const cleanup = FillCore.removeLeftoverWidgets({ header: fj.qpdf[0], objects: fj.qpdf[1], pages: fj.pages });
+    if (cleanup) {
+      q.FS.writeFile("/u2.json", JSON.stringify(cleanup));
+      ok(q.run([...pwArgs(password), "/flat.pdf", "--update-from-json=/u2.json", "/out.pdf"]), "Flattening");
+    } else q.FS.rename("/flat.pdf", "/out.pdf");
+  }
+  progress("Checking the result…", 0.9);
+  verify(q, "/out.pdf", password, j.pages.length);
+  return { files: [{ data: q.FS.readFile("/out.pdf") }] };
+}
+
 // ----------------------------------------------------------------- main ---
 
-const OPS = { inspect, checkPassword, runQpdf, compress };
+const OPS = { inspect, checkPassword, runQpdf, compress, fillSign };
 
 onmessage = async ({ data: msg }) => {
   try {
