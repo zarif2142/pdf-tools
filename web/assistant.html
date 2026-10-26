@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <!--
+    Unlike the PDF tools, this page does send data: what you type or attach
+    goes to the family's assistant server (a Cloudflare Worker), which passes
+    it to Claude. connect-src allows that server and nothing else.
+  -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; connect-src 'self' https://*.workers.dev http://127.0.0.1:8787; img-src 'self' blob: data:; font-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'">
+  <meta name="referrer" content="no-referrer">
+  <meta name="robots" content="noindex">
+  <title>Assistant · PDF Tools</title>
+  <meta name="theme-color" content="#f6f5f1" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#16181c" media="(prefers-color-scheme: dark)">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon-180.png">
+  <link rel="stylesheet" href="app.css">
+  <link rel="stylesheet" href="assistant.css">
+  <script type="module" src="assistant.js"></script>
+</head>
+<body class="assistant-page">
+  <header class="top">
+    <a href="./" class="brand"><img src="icon.svg" alt="" width="28" height="28"> PDF Tools</a>
+    <span class="top-actions" id="top-actions" hidden>
+      <button type="button" class="btn small ghost" id="new-chat">New chat</button>
+      <button type="button" class="btn small ghost" id="sign-out">Sign out</button>
+    </span>
+  </header>
+  <main id="app">
+    <noscript><p>This page needs JavaScript.</p></noscript>
+  </main>
+</body>
+</html>

@@ -1,0 +1,20 @@
+# Cloudflare Worker that lets the PDF Tools assistant page talk to Claude.
+# It holds the Anthropic API key, so the key never reaches anyone's browser.
+# Secrets (set once with `npx wrangler secret put NAME`):
+#   ANTHROPIC_API_KEY  your Anthropic API key
+#   ACCESS_CODES       who may use it, as name:code pairs, e.g. "Zarif:...,Mom:...,Dad:..."
+name = "pdf-tools-assistant"
+main = "src/index.js"
+compatibility_date = "2026-10-01"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+# Only pages from these sites may call the Worker (comma-separated)
+ALLOWED_ORIGINS = "https://zarif2142.github.io,http://localhost:8766"
+MODEL = "claude-opus-5-5"
+
+# At most 30 requests a minute from one address, so access codes can't be guessed
+[[ratelimits]]
+name = "LIMITER"
+namespace_id = "1001"
+simple = { limit = 30, period = 60 }

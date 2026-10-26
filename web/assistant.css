@@ -1,0 +1,108 @@
+/* The family assistant page. Base styles and colours come from app.css. */
+
+.assistant-page { font-size: 18px; }
+.top-actions { display: flex; gap: 6px; }
+
+.login { display: flex; flex-direction: column; gap: 14px; max-width: 460px; margin: 24px auto 0; }
+.login h1 { margin: 0; font-size: 30px; }
+.login .lede { margin: 0; }
+.login input[type="password"] { width: 100%; font-size: 18px; min-height: 52px; }
+.login .btn { min-height: 52px; font-size: 18px; }
+.login .status { margin: 0; }
+
+.chat { display: flex; flex-direction: column; min-height: calc(100vh - 140px); max-width: 780px; margin: 0 auto; }
+.chat-list { flex: 1; display: flex; flex-direction: column; gap: 14px; padding: 8px 0 20px; }
+
+.welcome { margin: auto 0; padding: 24px 0; }
+.welcome h1 { font-size: 28px; margin: 0 0 18px; }
+.suggestions { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+.suggestion {
+  text-align: left;
+  font: inherit;
+  font-size: 17px;
+  padding: 16px;
+  min-height: 60px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+.suggestion:hover { border-color: var(--accent); }
+
+.bubble { max-width: 92%; border-radius: 18px; padding: 12px 16px; line-height: 1.55; overflow-wrap: anywhere; }
+.bubble.user { align-self: flex-end; background: var(--accent); color: var(--accent-text); white-space: pre-wrap; border-bottom-right-radius: 6px; }
+.bubble.assistant { align-self: flex-start; background: var(--surface); border: 1px solid var(--line); border-bottom-left-radius: 6px; }
+.bubble-body > :first-child { margin-top: 0; }
+.bubble-body > :last-child { margin-bottom: 0; }
+.bubble-body p, .bubble-body ul, .bubble-body ol { margin: 0 0 .7em; }
+.bubble-body ul, .bubble-body ol { padding-left: 1.4em; }
+.bubble-body li { margin: .25em 0; }
+.bubble-body h3 { font-size: 1.05em; margin: .9em 0 .4em; }
+.bubble-body code { font-size: .9em; background: var(--surface-2); padding: 1px 5px; border-radius: 5px; }
+.bubble-body pre { background: var(--surface-2); padding: 10px 12px; border-radius: 10px; overflow-x: auto; }
+.bubble-body pre code { background: none; padding: 0; }
+.bubble-body hr { border: 0; border-top: 1px solid var(--line); }
+.bubble-body .table-wrap { overflow-x: auto; margin: 0 0 .7em; }
+.bubble-body table { border-collapse: collapse; font-size: .92em; }
+.bubble-body th, .bubble-body td { border: 1px solid var(--line); padding: 5px 8px; text-align: left; vertical-align: top; }
+.bubble-files { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.bubble.user .file-chip { background: rgba(255, 255, 255, .2); color: inherit; }
+.bubble-tools { margin-top: 8px; }
+.bubble-tools .btn { min-height: 32px; padding: 2px 10px; font-size: 14px; }
+
+.typing { display: inline-flex; gap: 5px; padding: 6px 0; }
+.typing i { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); animation: blink 1.2s infinite ease-in-out; }
+.typing i:nth-child(2) { animation-delay: .15s; }
+.typing i:nth-child(3) { animation-delay: .3s; }
+@keyframes blink { 0%, 80%, 100% { opacity: .25; } 40% { opacity: 1; } }
+
+.composer {
+  position: sticky;
+  bottom: 0;
+  background: var(--bg);
+  padding: 10px 0 max(10px, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--line);
+}
+.composer-row { display: flex; gap: 8px; align-items: flex-end; }
+.chat-input {
+  flex: 1;
+  resize: none;
+  font: inherit;
+  font-size: 18px;
+  line-height: 1.4;
+  min-height: 52px;
+  max-height: 220px;
+  padding: 13px 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text);
+}
+.chat-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.composer .attach { width: 52px; height: 52px; font-size: 22px; flex: none; }
+.composer .send { min-height: 52px; font-size: 18px; flex: none; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-chip img { width: 26px; height: 26px; object-fit: cover; border-radius: 5px; }
+.file-chip button { border: 0; background: none; color: var(--muted); font-size: 15px; cursor: pointer; padding: 2px 4px; }
+.privacy { margin: 8px 0 0; font-size: 13px; }
+
+.toast { position: fixed; left: 16px; right: 16px; bottom: 110px; z-index: 50; max-width: 560px; margin: 0 auto; box-shadow: var(--shadow); }
+
+@media (max-width: 560px) {
+  .composer .send { padding: 0 14px; }
+  .bubble { max-width: 100%; }
+}

@@ -1,5 +1,6 @@
-// "Fill & sign": fill a PDF's form fields and place text, dates, check marks
-// and signatures anywhere on its pages.
+// "Fill & sign" and "Edit PDF": fill a PDF's form fields, change or erase the
+// text already on its pages, and place text, dates, check marks and signatures
+// anywhere.
 //
 // Positions are kept in "page units": pdf.js viewport coordinates at scale 1
 // (points, y pointing down, page rotation applied), which is exactly what the
@@ -8,6 +9,7 @@
 import { canvasToPdfImage } from "./images.js";
 
 const LINE_HEIGHT = 1.2; // must match fill-core.js
+const FIRST_BASELINE = 0.9465; // likewise
 const COLORS = { black: [0, 0, 0], blue: [0.05, 0.2, 0.6] };
 const cssColor = ([r, g, b]) => `rgb(${r * 255} ${g * 255} ${b * 255})`;
 const MAX_SIG_PX = 1000;
@@ -19,9 +21,10 @@ export function disposeFillSign() {
   editor = null;
 }
 
-// ctx: helpers from app.js { h, job, openPdfjs, pdfjs, setStatus, showResults, doubleCheck, stem, guard, isBusy }
+// ctx: helpers from app.js { h, job, openPdfjs, pdfjs, setStatus, showResults, doubleCheck, stem, guard, isBusy, mode }
+// mode "edit" starts with the Edit text tool picked
 export function fillSignView(it, ctx) {
-  if (!editor || editor.it !== it) {
+  if (!editor || editor.it !== it || editor.mode !== ctx.mode) {
     disposeFillSign();
     editor = createEditor(it, ctx);
   }
@@ -50,13 +53,41 @@ function toViewBox(m, [x1, y1, x2, y2]) {
   return { x, y, w: Math.max(...xs) - x, h: Math.max(...ys) - y };
 }
 
+// [a b c d e f] maps (x, y) -> (a x + c y + e, b x + d y + f)
+const mulM = (A, B) => [ // apply A, then B
+  A[0] * B[0] + A[1] * B[2], A[0] * B[1] + A[1] * B[3],
+  A[2] * B[0] + A[3] * B[2], A[2] * B[1] + A[3] * B[3],
+  A[4] * B[0] + A[5] * B[2] + B[4], A[4] * B[1] + A[5] * B[3] + B[5],
+];
+function invertM(m) {
+  const det = m[0] * m[3] - m[1] * m[2];
+  return [m[3] / det, -m[1] / det, -m[2] / det, m[0] / det,
+    (m[2] * m[5] - m[3] * m[4]) / det, (m[1] * m[4] - m[0] * m[5]) / det];
+}
+// box in page units -> PDF rectangle [x1 y1 x2 y2], via the inverse page transform
+function pdfRect(inv, { x, y, w, h }) {
+  const pts = [[x, y], [x + w, y], [x, y + h], [x + w, y + h]].map(([px, py]) => [inv[0] * px + inv[2] * py + inv[4], inv[1] * px + inv[3] * py + inv[5]]);
+  const xs = pts.map((q) => q[0]), ys = pts.map((q) => q[1]);
+  return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
+}
+const normText = (s) => s.normalize("NFKC").replace(/\s+/gu, "");
+
+// Retyped text uses the standard PDF fonts, which can show Latin letters and
+// common symbols (WinAnsi). Ligatures are split ("ﬁ" -> "fi"), curly quotes and
+// dashes kept, and anything else (icon fonts, other scripts) left out.
+const WIN_ANSI_EXTRA = new Set("€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ");
+const typeable = (ch) => { const c = ch.codePointAt(0); return (c >= 0x20 && c <= 0x7e) || (c >= 0xa0 && c <= 0xff) || WIN_ANSI_EXTRA.has(ch); };
+const toTypeable = (s) => [...s].map((ch) => (typeable(ch) ? ch : [...ch.normalize("NFKC")].every(typeable) ? ch.normalize("NFKC") : ""))
+  .join("").replace(/ {2,}/g, " ").trim();
+
 function createEditor(it, ctx) {
   const { h } = ctx;
   const state = {
     pages: [], // { index, page, vp1, wrap, canvas, fieldLayer, itemLayer, scale, rendered }
     fields: new Map(), // fieldName -> { type, value, initial, display, widgetRefs: Set, els: [] }
     items: [],
-    tool: null, // 'text' | 'date' | 'check' | 'cross' | 'signature'
+    edits: [], // { line, item }: lines of the page's own text being changed (item null = deleted)
+    tool: null, // 'edittext' | 'erase' | 'text' | 'date' | 'check' | 'cross' | 'signature'
     selected: null,
     signature: null, // { canvas, url } most recent
     color: "black",
@@ -82,6 +113,8 @@ function createEditor(it, ctx) {
   const selControls = h("span", { class: "sel-controls" }, sizeDown, sizeUp, dateSel, delBtn);
   const toolbar = h("div", { class: "sign-toolbar" },
     h("span", { class: "tool-group" },
+      toolBtn("edittext", "✎ Edit text", "Tap text that's already on the page to change it"),
+      toolBtn("erase", "▭ Erase", "Drag a box over anything to remove it"),
       toolBtn("text", "T Text", "Type text anywhere"),
       toolBtn("date", "📅 Date", "Add today's date"),
       toolBtn("check", "✓", "Check mark"),
@@ -94,10 +127,9 @@ function createEditor(it, ctx) {
   const pagesBox = h("div", { class: "sign-pages" });
   const flattenBox = h("input", { type: "checkbox", onchange: (e) => (state.flatten = e.target.checked) });
   const saveBtn = h("button", { type: "button", class: "btn primary", onclick: () => ctx.guard(save) }, "Save PDF");
-  const footer = h("div", { class: "sign-footer" },
-    h("label", { class: "check" }, flattenBox,
-      h("span", {}, " Lock answers in place ", h("span", { class: "hint" }, "(fields become part of the page and can't be edited later)"))),
-    saveBtn);
+  const flattenLabel = h("label", { class: "check" }, flattenBox,
+    h("span", {}, " Lock answers in place ", h("span", { class: "hint" }, "(fields become part of the page and can't be edited later)")));
+  const footer = h("div", { class: "sign-footer" }, flattenLabel, saveBtn);
   const el = h("div", { class: "sign-editor" }, toolbar, hint, pagesBox, footer);
 
   // --- signature dialog (created once)
@@ -124,13 +156,19 @@ function createEditor(it, ctx) {
   function setTool(tool) {
     state.tool = tool;
     for (const b of toolbar.querySelectorAll(".tool-btn")) b.setAttribute("aria-pressed", String(b.dataset.tool === tool));
-    el.classList.toggle("placing", !!tool);
+    el.classList.toggle("placing", !!tool && tool !== "edittext");
+    el.dataset.tool = tool || "";
     updateHint();
   }
 
   function updateHint() {
     const hasFields = state.fields.size > 0;
+    const noText = state.tool === "edittext" && state.pages.length && state.pages.every((p) => p.lines && !p.lines.length);
     const msgs = {
+      edittext: noText
+        ? "No typed text found in this PDF (it's probably a scan). Use ▭ Erase to cover words, then T Text to type new ones."
+        : "Tap any line of text to change it. Delete all of a line's text to remove it.",
+      erase: "Drag a box over anything to remove it. Tap ▭ Erase again when done.",
       text: "Tap the page where the text should start.",
       date: "Tap the page where the date should go.",
       check: "Tap each spot that needs a check mark. Tap ✓ again when done.",
@@ -146,7 +184,7 @@ function createEditor(it, ctx) {
     state.color = c;
     for (const b of colorBtns) b.classList.toggle("on", b.classList.contains(c));
     const item = state.selected;
-    if (item && item.type !== "image") { item.color = COLORS[c]; layoutItem(item); }
+    if (item && item.type !== "image" && item.type !== "erase") { item.color = COLORS[c]; layoutItem(item); }
   }
 
   function setDateFormat(fmt) {
@@ -183,15 +221,17 @@ function createEditor(it, ctx) {
         const vp1 = page.getViewport({ scale: 1 });
         const p = { index: i - 1, page, vp1 };
         p.canvas = h("canvas", { class: "sign-canvas" });
+        p.textLayer = h("div", { class: "text-layer" });
         p.fieldLayer = h("div", { class: "field-layer" });
         p.itemLayer = h("div", { class: "item-layer" });
-        p.wrap = h("div", { class: "sign-page", "data-page": i }, p.canvas, p.fieldLayer, p.itemLayer,
+        p.wrap = h("div", { class: "sign-page", "data-page": i }, p.canvas, p.textLayer, p.fieldLayer, p.itemLayer,
           h("span", { class: "page-label" }, `Page ${i} of ${state.doc.numPages}`));
         // the page fills the column (up to 900px) at its own aspect ratio; its real
         // on-screen size is measured by the ResizeObserver below
         p.wrap.style.aspectRatio = `${vp1.width} / ${vp1.height}`;
         p.scale = Math.min(pagesBox.clientWidth || 800, 900) / vp1.width;
         p.wrap.addEventListener("click", (e) => onPageClick(p, e));
+        p.wrap.addEventListener("pointerdown", (e) => onPagePointerDown(p, e));
         state.pages.push(p);
         pagesBox.append(p.wrap);
         await addFields(p);
@@ -209,6 +249,7 @@ function createEditor(it, ctx) {
         }
       });
       state.pages.forEach((p) => { layoutPage(p); observer.observe(p.wrap); sizeObserver.observe(p.wrap); });
+      flattenLabel.hidden = !state.fields.size;
       updateHint();
     } catch (e) {
       console.error(e);
@@ -222,6 +263,7 @@ function createEditor(it, ctx) {
   function layoutPage(p) {
     p.laidOut = true;
     for (const f of p.fieldEls || []) f.layout();
+    for (const l of p.lines || []) layoutLine(l);
     state.items.filter((i) => i.page === p).forEach(layoutItem);
     p.rendered = false;
     clearTimeout(p.renderTimer);
@@ -266,6 +308,7 @@ function createEditor(it, ctx) {
       c.className = "sign-canvas";
       p.canvas = c;
       p.rendered = true;
+      if (!p.lines) await loadLines(p); // fonts are known once the page has been drawn
     } catch (e) {
       if (e?.name !== "RenderingCancelledException") console.error(e);
     } finally {
@@ -384,9 +427,217 @@ function createEditor(it, ctx) {
     }
   }
 
+  // ------------------------------------------------------ existing text ---
+
+  // Groups the page's text into lines that can be tapped and retyped. Each line
+  // remembers where it is, in page units for the screen and in PDF units for
+  // removing it, plus its font, size and colours.
+  async function loadLines(p) {
+    p.lines = [];
+    let tc;
+    try {
+      tc = await p.page.getTextContent();
+    } catch {
+      return;
+    }
+    const inv = invertM(p.vp1.transform);
+    p.textItems = []; // every piece of text, in order, for checking the result
+    let cur = null;
+    let blank = null; // spaces just before a line: removing the line removes them too
+    for (const it2 of tc.items) {
+      if (typeof it2.str !== "string") continue;
+      const t = it2.transform;
+      p.textItems.push({ str: it2.str, x: t[4], y: t[5] });
+      if (!it2.str.trim()) {
+        if (cur && it2.hasEOL) cur = null;
+        const m = mulM(t, p.vp1.transform);
+        blank ??= { x: m[4], base: m[5] };
+        continue;
+      }
+      const m = mulM(t, p.vp1.transform); // text space -> page units
+      const size = Math.hypot(m[2], m[3]);
+      // only text running left to right on screen can be retyped in place
+      if (!(size > 1) || m[0] <= 0 || Math.abs(m[1]) > 0.02 * m[0] || Math.abs(m[2]) > 0.02 * size) { cur = null; continue; }
+      const x = m[4], base = m[5], w = it2.width;
+      const sameLine = cur && Math.abs(base - cur.baseline) < 0.2 * size && Math.abs(size - cur.size) < 0.25 * size &&
+        x > cur.x1 - 0.5 * size && x - cur.x1 < 1.2 * size;
+      if (!sameLine) {
+        cur = { page: p, text: "", x0: x, x1: x, baseline: base, size, fontName: it2.fontName, items: [] };
+        cur.start = blank && Math.abs(blank.base - base) < 0.2 * size && blank.x < x && x - blank.x < 4 * size ? blank.x : x;
+        p.lines.push(cur);
+      } else if (x - cur.x1 > 0.15 * size && !/\s$/.test(cur.text)) cur.text += " ";
+      cur.text += it2.str;
+      cur.x1 = Math.max(cur.x1, x + w);
+      cur.items.push(p.textItems.length - 1);
+      blank = null;
+      if (it2.hasEOL) cur = null;
+    }
+    for (const l of p.lines) l.text = toTypeable(l.text);
+    p.lines = p.lines.filter((l) => l.text); // e.g. a line of icons only
+    for (const l of p.lines) {
+      l.font = lineFont(p, tc.styles[l.fontName], l.fontName);
+      // box covering the letters on screen (also drawn over them if needed)
+      l.box = { x: l.x0 - 0.5, y: l.baseline - 0.95 * l.size, w: l.x1 - l.x0 + 1, h: 1.22 * l.size };
+      l.coverRect = pdfRect(inv, l.box);
+      // where the line's text starts: on its baseline, from its left edge
+      l.removeRect = pdfRect(inv, { x: l.start - 1, y: l.baseline - 0.25 * l.size, w: l.x1 - l.start + 1, h: 0.5 * l.size });
+      l.hit = h("div", { class: "text-hit", title: "Tap to change this text" });
+      l.hit.addEventListener("click", (e) => {
+        if (state.tool !== "edittext") return;
+        e.stopPropagation();
+        startEdit(l);
+      });
+      p.textLayer.append(l.hit);
+      layoutLine(l);
+    }
+    updateHint();
+  }
+
+  function layoutLine(l) {
+    place(l.hit, l.page, l.box);
+    if (l.mask) place(l.mask, l.page, l.box);
+  }
+
+  // The closest standard font: Helvetica, Times or Courier, bold and/or italic
+  function lineFont(p, style, id) {
+    let f = null;
+    try { f = p.page.commonObjs.has(id) ? p.page.commonObjs.get(id) : null; } catch { /* not loaded */ }
+    const name = String(f?.name || "").replace(/^[A-Z]{6}\+/, "");
+    const mono = f?.isMonospace || /courier|mono|consol/i.test(name) || style?.fontFamily === "monospace";
+    const serif = !mono && !/sans|arial|helvet|calibri|verdana/i.test(name) &&
+      (f?.isSerifFont || /times|serif|georgia|garamond|cambria|roman|minion|palatino|book/i.test(name) || style?.fontFamily === "serif");
+    const bold = !!(f?.bold || f?.black) || /bold|black|heavy|semibold|demi/i.test(name);
+    const italic = !!f?.italic || /italic|oblique/i.test(name);
+    const family = mono ? "Courier" : serif ? "Times" : "Helvetica";
+    const slant = family === "Times" ? "Italic" : "Oblique";
+    const std = family === "Times"
+      ? `Times-${bold && italic ? "BoldItalic" : bold ? "Bold" : italic ? "Italic" : "Roman"}`
+      : `${family}${bold || italic ? "-" : ""}${bold ? "Bold" : ""}${italic ? slant : ""}`;
+    return { std, css: `PDF ${family}`, bold, italic };
+  }
+
+  // Colours under a box on the drawn page: the background (most common colour
+  // around its edge) and, for text, the ink (the pixels least like it).
+  function sampleColors(p, box) {
+    const c = p.canvas;
+    const k = c.width / p.vp1.width;
+    const x = Math.max(0, Math.floor(box.x * k) - 2), y = Math.max(0, Math.floor(box.y * k) - 2);
+    const w = Math.min(c.width - x, Math.ceil(box.w * k) + 4), hh = Math.min(c.height - y, Math.ceil(box.h * k) + 4);
+    if (w < 3 || hh < 3) return { bg: [1, 1, 1], ink: [0, 0, 0] };
+    const px = c.getContext("2d", { willReadFrequently: true }).getImageData(x, y, w, hh).data;
+    const at = (i, j) => { const o = (j * w + i) * 4; return [px[o], px[o + 1], px[o + 2]]; };
+    const counts = new Map();
+    const edge = [];
+    for (let i = 0; i < w; i++) edge.push(at(i, 0), at(i, hh - 1));
+    for (let j = 0; j < hh; j++) edge.push(at(0, j), at(w - 1, j));
+    for (const q of edge) {
+      const key = q.map((v) => v >> 3).join();
+      const e = counts.get(key) || { n: 0, sum: [0, 0, 0] };
+      e.n++; e.sum = e.sum.map((v, i) => v + q[i]);
+      counts.set(key, e);
+    }
+    const top = [...counts.values()].sort((a, b) => b.n - a.n)[0];
+    const bg = top.sum.map((v) => v / top.n);
+    const dist = (q) => Math.hypot(q[0] - bg[0], q[1] - bg[1], q[2] - bg[2]);
+    let max = 0;
+    const inner = [];
+    for (let j = 2; j < hh - 2; j++) for (let i = 2; i < w - 2; i++) { const q = at(i, j); inner.push(q); max = Math.max(max, dist(q)); }
+    const inkPx = inner.filter((q) => dist(q) > 0.8 * max);
+    const ink = max > 40 && inkPx.length
+      ? [0, 1, 2].map((i) => inkPx.reduce((a, q) => a + q[i], 0) / inkPx.length)
+      : [0, 0, 0];
+    const unit = (v) => v.map((x) => Math.round(x / 255 * 1000) / 1000);
+    // edge smoothing lightens thin letters a little: near-black is black
+    const grey = Math.max(...ink) - Math.min(...ink) < 20;
+    return { bg: unit(bg), ink: max > 40 && !(grey && Math.max(...ink) < 60) ? unit(ink) : [0, 0, 0] };
+  }
+
+  function startEdit(l) {
+    if (l.edit?.item) { focusEnd(l.edit.item); return; }
+    const p = l.page;
+    measure(p);
+    if (!l.colors) l.colors = sampleColors(p, l.box);
+    if (!l.edit) {
+      l.mask = h("div", { class: "text-mask" });
+      l.mask.style.background = cssColor(l.colors.bg);
+      p.textLayer.insertBefore(l.mask, l.hit);
+      layoutLine(l);
+      l.edit = { line: l, item: null };
+      state.edits.push(l.edit);
+    }
+    const size = l.size;
+    const item = addItem({ type: "text", page: p, x: l.x0, y: l.baseline - FIRST_BASELINE * size, w: 0, h: LINE_HEIGHT * size,
+      size, text: l.text, color: l.colors.ink, font: l.font, edit: l.edit }, true);
+    item.initial = { x: item.x, y: item.y, size, color: item.color, text: l.text };
+    l.edit.item = item;
+    focusEnd(item);
+  }
+
+  function focusEnd(item) {
+    const body = item.el.querySelector(".item-text");
+    body.focus();
+    const r = document.createRange();
+    r.selectNodeContents(body);
+    r.collapse(false);
+    const sel = getSelection();
+    sel.removeAllRanges();
+    sel.addRange(r);
+  }
+
+  const unchanged = (item) => item.initial && item.text === item.initial.text && item.x === item.initial.x &&
+    item.y === item.initial.y && item.size === item.initial.size && item.color === item.initial.color;
+
+  // An edited line put back exactly as it was: show the original again
+  function revertIfUnchanged(item) {
+    if (!item?.edit || !unchanged(item)) return;
+    const { line } = item.edit;
+    item.edit.item = null;
+    item.el.remove();
+    state.items = state.items.filter((x) => x !== item);
+    line.mask.remove();
+    line.mask = null;
+    state.edits = state.edits.filter((e) => e !== line.edit);
+    line.edit = null;
+  }
+
+  // Erase: drag out a box on the page
+  function onPagePointerDown(p, e) {
+    if (state.tool !== "erase" || e.button !== 0 || e.target.closest(".sign-item, .field, .sig-field")) return;
+    e.preventDefault();
+    measure(p);
+    const r = p.wrap.getBoundingClientRect();
+    const at = (ev) => [(ev.clientX - r.left) / p.scale, (ev.clientY - r.top) / p.scale];
+    const [x0, y0] = at(e);
+    const item = addItem({ type: "erase", page: p, x: x0, y: y0, w: 0, h: 0, color: [1, 1, 1] });
+    try { p.wrap.setPointerCapture(e.pointerId); } catch { /* pointer already gone */ }
+    const move = (ev) => {
+      const [x, y] = at(ev);
+      Object.assign(item, { x: Math.min(x, x0), y: Math.min(y, y0), w: Math.abs(x - x0), h: Math.abs(y - y0) });
+      layoutItem(item);
+    };
+    const up = (ev) => {
+      p.wrap.removeEventListener("pointermove", move);
+      p.wrap.removeEventListener("pointerup", up);
+      p.wrap.removeEventListener("pointercancel", up);
+      swallowClick = ev.type === "pointerup"; // the click that ends this drag
+      if (item.w < 4 || item.h < 4) Object.assign(item, { x: x0 - 40, y: y0 - 8, w: 80, h: 16 }); // a tap
+      item.color = sampleColors(p, item).bg;
+      layoutItem(item);
+    };
+    p.wrap.addEventListener("pointermove", move);
+    p.wrap.addEventListener("pointerup", up);
+    p.wrap.addEventListener("pointercancel", up);
+  }
+  let swallowClick = false;
+
   // -------------------------------------------------------------- items ---
 
   function onPageClick(p, e) {
+    if (swallowClick) { swallowClick = false; return; }
+    if (state.tool === "edittext" || state.tool === "erase") {
+      if (!e.target.closest(".sign-item")) select(null);
+      return;
+    }
     if (!state.tool || e.target.closest(".field, .sign-item, .sig-field")) {
       if (!e.target.closest(".sign-item")) select(null);
       return;
@@ -417,6 +668,8 @@ function createEditor(it, ctx) {
     state.items.push(item);
     const body = item.type === "text"
       ? h("div", { class: "item-text", contenteditable: "plaintext-only", spellcheck: "false" }, item.text)
+      : item.type === "erase"
+        ? h("div", { class: "erase-fill" })
       : item.type === "image"
         ? h("img", { src: item.sig.url, alt: "Signature", draggable: "false" })
         : h("span", { class: "mark", html: markSvg(item.type) });
@@ -458,10 +711,16 @@ function createEditor(it, ctx) {
     const st = item.el.style;
     st.left = `${item.x * s}px`;
     st.top = `${item.y * s}px`;
-    st.color = item.color ? cssColor(item.color) : "";
+    if (item.type === "erase") st.background = cssColor(item.color);
+    else st.color = item.color ? cssColor(item.color) : "";
     if (item.type === "text") {
       const body = item.el.querySelector(".item-text");
       body.style.fontSize = `${item.size * s}px`;
+      if (item.font) {
+        body.style.fontFamily = `"${item.font.css}"`;
+        body.style.fontWeight = item.font.bold ? "700" : "400";
+        body.style.fontStyle = item.font.italic ? "italic" : "normal";
+      }
       st.width = st.height = "";
       measureText(item);
     } else {
@@ -478,7 +737,9 @@ function createEditor(it, ctx) {
 
   function select(item) {
     if (state.selected === item) return;
-    state.selected?.el.classList.remove("selected");
+    const prev = state.selected;
+    prev?.el.classList.remove("selected");
+    revertIfUnchanged(prev);
     state.selected = item;
     item?.el.classList.add("selected");
     updateSelControls();
@@ -486,6 +747,7 @@ function createEditor(it, ctx) {
 
   function removeItem(item) {
     if (!item) return;
+    if (item.edit) item.edit.item = null; // the line stays hidden: it's deleted
     item.el.remove();
     state.items = state.items.filter((x) => x !== item);
     if (state.selected === item) select(null);
@@ -519,6 +781,7 @@ function createEditor(it, ctx) {
         if (resize) {
           const f = Math.max(0.2, (start.w + dx) / start.w);
           if (item.type === "text") item.size = Math.min(72, Math.max(5, start.size * f));
+          else if (item.type === "erase") { item.w = Math.max(4, start.w + dx); item.h = Math.max(4, start.h + dy); }
           else { item.w = start.w * f; item.h = start.h * f; }
         } else {
           const pw = item.page.vp1.width, ph = item.page.vp1.height;
@@ -552,6 +815,7 @@ function createEditor(it, ctx) {
 
   async function save() {
     document.activeElement?.blur?.();
+    for (const e of [...state.edits]) revertIfUnchanged(e.item);
     const fieldChanges = [];
     for (const f of state.fields.values()) {
       if (f.value === f.initial) continue;
@@ -559,8 +823,11 @@ function createEditor(it, ctx) {
       if (f.type === "choice") change.display = f.options?.find((o) => o.exportValue === f.value)?.displayValue ?? f.value;
       fieldChanges.push(change);
     }
-    const items = state.items.filter((i) => i.type !== "text" || i.text.trim());
-    if (!fieldChanges.length && !items.length) throw new Error("Nothing to save yet. Fill in a field or add something to a page first.");
+    const items = state.items.filter((i) => i.type !== "erase" && (i.type !== "text" || i.text.trim()));
+    const erased = state.items.filter((i) => i.type === "erase");
+    if (!fieldChanges.length && !items.length && !state.edits.length && !erased.length) {
+      throw new Error("Nothing to save yet. Change some text, fill in a field or add something to a page first.");
+    }
 
     ctx.setStatus("Preparing…", -1);
     const encoded = new Map(); // one PDF image per signature, reused for every placement
@@ -569,7 +836,7 @@ function createEditor(it, ctx) {
       const list = [];
       for (const i of items.filter((x) => x.page === p)) {
         const out = { type: i.type, x: i.x, y: i.y, w: i.w, h: i.h };
-        if (i.type === "text") Object.assign(out, { text: i.text, size: i.size, color: i.color });
+        if (i.type === "text") Object.assign(out, { text: i.text, size: i.size, color: i.color, font: i.font?.std });
         else if (i.type === "image") {
           if (!encoded.has(i.sig)) encoded.set(i.sig, await canvasToPdfImage(i.sig.canvas));
           const img = encoded.get(i.sig);
@@ -580,23 +847,77 @@ function createEditor(it, ctx) {
       if (list.length) pageItems.push({ pageIndex: p.index, viewportTransform: p.vp1.transform, items: list });
     }
 
-    const r = await ctx.job({ op: "fillSign", data: it.data, password: it.password, fieldChanges, pageItems,
+    // text to remove: retyped or deleted lines, and erased boxes
+    const edits = [];
+    for (const p of state.pages) {
+      const inv = invertM(p.vp1.transform);
+      const regions = [
+        ...state.edits.filter((e) => e.line.page === p).map(({ line }) =>
+          ({ rect: line.removeRect, coverRect: line.coverRect, color: line.colors.bg, cover: "auto" })),
+        ...erased.filter((i) => i.page === p).map((i) => {
+          const rect = pdfRect(inv, i);
+          return { rect, coverRect: rect, color: i.color, cover: "always" };
+        }),
+      ];
+      if (regions.length) edits.push({ pageIndex: p.index, regions, removeText: true });
+    }
+
+    const run = () => ctx.job({ op: "fillSign", data: it.data, password: it.password, fieldChanges, pageItems, edits,
       flatten: state.flatten }, (t, f) => ctx.setStatus(t, f));
+    let r = await run();
+    // Check that removing text took away exactly what it should have. If not
+    // (unusual PDFs), redo those pages by covering the old text instead.
+    const bad = await checkRemoval(r.files[0].data, r.report, edits, pageItems);
+    if (bad.length) {
+      for (const e of edits) if (bad.includes(e.pageIndex)) e.removeText = false;
+      r = await run();
+    }
     const out = r.files[0].data;
     await ctx.doubleCheck(out, it.password, state.pages.length);
     const parts = [];
+    const changed = state.edits.filter((e) => e.item?.text.trim()).length, deleted = state.edits.length - changed;
+    if (changed) parts.push(`${changed} line${changed === 1 ? "" : "s"} changed`);
+    if (deleted) parts.push(`${deleted} line${deleted === 1 ? "" : "s"} deleted`);
+    if (erased.length) parts.push(`${erased.length} area${erased.length === 1 ? "" : "s"} erased`);
     if (fieldChanges.length) parts.push(`${fieldChanges.length} field${fieldChanges.length === 1 ? "" : "s"} filled`);
-    if (items.length) parts.push(`${items.length} item${items.length === 1 ? "" : "s"} added`);
+    const added = items.filter((i) => !i.edit).length;
+    if (added) parts.push(`${added} item${added === 1 ? "" : "s"} added`);
     ctx.setStatus(`Done: ${parts.join(", ")}. Open it and check everything before sending.`, null, "ok");
-    ctx.showResults([{ name: `${ctx.stem(it.file.name)}-signed.pdf`, data: out, type: "application/pdf" }]);
+    ctx.showResults([{ name: `${ctx.stem(it.file.name)}-${ctx.mode === "edit" ? "edited" : "signed"}.pdf`, data: out, type: "application/pdf" }]);
+  }
+
+  // Pages where the text left over isn't exactly the original minus what was
+  // removed, followed by what was added. Returns their indexes.
+  async function checkRemoval(data, report, edits, pageItems) {
+    const pagesToCheck = report.filter((x) => x.removed.some(Boolean));
+    if (!pagesToCheck.length) return [];
+    const doc = await ctx.openPdfjs(data, it.password);
+    const bad = [];
+    try {
+      for (const { pageIndex, removed } of pagesToCheck) {
+        const p = state.pages[pageIndex];
+        const rects = edits.find((e) => e.pageIndex === pageIndex).regions.filter((_, k) => removed[k]).map((g) => g.rect);
+        const kept = p.textItems.filter((t) => !rects.some((r) => t.x >= r[0] && t.x <= r[2] && t.y >= r[1] && t.y <= r[3]));
+        const added = pageItems.find((x) => x.pageIndex === pageIndex)?.items.filter((x) => x.type === "text") || [];
+        const expected = normText(kept.map((t) => t.str).join("") + added.map((x) => x.text).join(""));
+        const tc = await (await doc.getPage(pageIndex + 1)).getTextContent();
+        const got = normText(tc.items.map((t) => t.str ?? "").join(""));
+        if (!got.startsWith(expected)) bad.push(pageIndex);
+      }
+    } finally {
+      await doc.close();
+    }
+    return bad;
   }
 
   init();
   setColor("black");
   updateSelControls();
+  if (ctx.mode === "edit") setTool("edittext");
 
   return {
     it,
+    mode: ctx.mode,
     el,
     update() { saveBtn.disabled = ctx.isBusy(); },
     dispose() {

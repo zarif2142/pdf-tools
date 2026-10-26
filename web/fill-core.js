@@ -5,9 +5,13 @@
 // original content is wrapped in q/Q so nothing it does to the graphics state
 // can affect the additions; the original content itself is never modified.
 //
-// All text is drawn in standard Helvetica, which every PDF viewer has built in,
-// so it can't come out invisible the way text in a form's embedded subset font
-// can when that font lacks a character.
+// All text is drawn in the standard Helvetica, Times or Courier fonts, which
+// every PDF viewer has built in, so it can't come out invisible the way text in
+// a form's embedded subset font can when that font lacks a character.
+//
+// "Edit text" and "Erase" also replace a page's original content with a copy
+// that has some text removed (see edit-core.js), and can draw background-
+// coloured boxes over spots whose text couldn't be removed.
 //
 // Plain script so the worker can importScripts() it and Node can require() it.
 
@@ -97,7 +101,15 @@
   const LINE_HEIGHT = 1.2;
   const FIRST_BASELINE = 0.9465;
 
-  // item: { type, x, y, w, h, text, size, color, imageName } in "page space":
+  // The 12 standard fonts used for typed text, and their resource names
+  const FONTS = {
+    "Helvetica": "FsHelv", "Helvetica-Bold": "FsHelvB", "Helvetica-Oblique": "FsHelvI", "Helvetica-BoldOblique": "FsHelvBI",
+    "Times-Roman": "FsTimes", "Times-Bold": "FsTimesB", "Times-Italic": "FsTimesI", "Times-BoldItalic": "FsTimesBI",
+    "Courier": "FsCour", "Courier-Bold": "FsCourB", "Courier-Oblique": "FsCourI", "Courier-BoldOblique": "FsCourBI",
+  };
+  const fontKey = (item) => (item.font in FONTS ? item.font : "Helvetica");
+
+  // item: { type, x, y, w, h, text, size, color, font, imageName } in "page space":
   // pdf.js viewport units at scale 1 (points, y down, rotation applied).
   function itemOps(item, viewportTransform) {
     const toPdf = compose(invert(viewportTransform), [1, 0, 0, -1, item.x, item.y + item.h]);
@@ -107,7 +119,7 @@
     if (item.type === "text") {
       const s = item.size;
       const lines = item.text.split("\n");
-      body += `BT /FsHelv ${n(s)} Tf ${color} rg\n`;
+      body += `BT /${FONTS[fontKey(item)]} ${n(s)} Tf ${color} rg\n`;
       lines.forEach((line, i) => {
         const y = item.h - FIRST_BASELINE * s - i * LINE_HEIGHT * s;
         body += `1 0 0 1 0 ${n(y)} Tm ${pdfString(line)} Tj\n`;
@@ -192,7 +204,10 @@
 
   // ------------------------------------------------------------ update ---
 
-  function buildFillUpdate({ header, objects, pages, fieldChanges = [], pageItems = [] }) {
+  // pageEdits: [{ pageIndex, contentFile, covers: [{ rect: [x1 y1 x2 y2], color }] }]
+  // contentFile (optional) replaces the page's content; covers are filled boxes
+  // in PDF user space, drawn over the page before any new items.
+  function buildFillUpdate({ header, objects, pages, fieldChanges = [], pageItems = [], pageEdits = [] }) {
     const working = new Map(); // ref -> edited copy of an object's value
     let nextId = header.maxobjectid + 1;
     const created = {};
@@ -215,15 +230,16 @@
       created[`obj:${ref}`] = { stream: { dict, data: b64(text) } };
       return ref;
     };
-    let fontRef = null;
-    const helvetica = () => {
-      if (!fontRef) {
-        fontRef = newRef();
-        created[`obj:${fontRef}`] = { value: { "/Type": "/Font", "/Subtype": "/Type1",
-          "/BaseFont": "/Helvetica", "/Encoding": "/WinAnsiEncoding" } };
+    const fontRefs = {};
+    const standardFont = (name) => {
+      if (!fontRefs[name]) {
+        fontRefs[name] = newRef();
+        created[`obj:${fontRefs[name]}`] = { value: { "/Type": "/Font", "/Subtype": "/Type1",
+          "/BaseFont": `/${name}`, "/Encoding": "/WinAnsiEncoding" } };
       }
-      return fontRef;
+      return fontRefs[name];
     };
+    const helvetica = () => standardFont("Helvetica");
     const apStates = (widget) => {
       const nAp = resolve(resolve(widget["/AP"])?.["/N"]);
       return nAp && typeof nAp === "object" ? Object.keys(nAp) : [];
@@ -292,9 +308,11 @@
       }
     }
 
-    // --- drawing added to pages
-    for (const pi of pageItems) {
-      if (!pi.items.length) continue;
+    // --- drawing added to pages, and edited page content
+    const byPage = new Map();
+    for (const pi of pageItems) if (pi.items.length) byPage.set(pi.pageIndex, { ...pi });
+    for (const pe of pageEdits) byPage.set(pe.pageIndex, { items: [], ...byPage.get(pe.pageIndex), edit: pe });
+    for (const pi of byPage.values()) {
       const pageRef = pages[pi.pageIndex].object;
       const page = val(pageRef);
 
@@ -309,9 +327,14 @@
       const fonts = { ...(resolve(resources["/Font"]) || {}) };
 
       let ops = "";
+      for (const c of pi.edit?.covers || []) {
+        const [x1, y1, x2, y2] = c.rect;
+        ops += `q ${c.color.map(n).join(" ")} rg ${n(x1)} ${n(y1)} ${n(x2 - x1)} ${n(y2 - y1)} re f Q\n`;
+      }
       for (const item of pi.items) {
         if (item.type === "text") {
-          fonts["/FsHelv"] = helvetica();
+          const key = fontKey(item);
+          fonts[`/${FONTS[key]}`] = standardFont(key);
           resources["/Font"] = fonts;
         }
         if (item.type === "image") {
@@ -332,8 +355,15 @@
       }
       page["/Resources"] = resources;
 
-      const old = page["/Contents"];
-      const oldList = old === undefined ? [] : Array.isArray(old) ? old : [old];
+      let oldList;
+      if (pi.edit?.contentFile) {
+        const ref = newRef();
+        created[`obj:${ref}`] = { stream: { dict: {}, datafile: pi.edit.contentFile } };
+        oldList = [ref];
+      } else {
+        const old = resolve(page["/Contents"]);
+        oldList = old == null ? [] : Array.isArray(old) ? old : [page["/Contents"]];
+      }
       page["/Contents"] = [newStream("q\n"), ...oldList, newStream(`\nQ\n${ops}`)];
     }
 
@@ -370,7 +400,16 @@
       calledgetallpages: header.calledgetallpages, maxobjectid: header.maxobjectid }, update] };
   }
 
-  const api = { buildFillUpdate, removeLeftoverWidgets, textFieldAppearance, itemOps, pdfString, LINE_HEIGHT, FIRST_BASELINE };
+  // The content stream objects that make up a page, in order
+  function pageContentRefs(objects, pageRef) {
+    const page = objects[`obj:${pageRef}`]?.value || {};
+    let c = page["/Contents"];
+    if (typeof c === "string" && REF_RE.test(c) && Array.isArray(objects[`obj:${c}`]?.value)) c = objects[`obj:${c}`].value;
+    return c == null ? [] : Array.isArray(c) ? c : [c];
+  }
+
+  const api = { buildFillUpdate, removeLeftoverWidgets, pageContentRefs, textFieldAppearance, itemOps, pdfString,
+    LINE_HEIGHT, FIRST_BASELINE, FONTS };
   if (typeof module !== "undefined") module.exports = api;
   else globalThis.FillCore = api;
 })();

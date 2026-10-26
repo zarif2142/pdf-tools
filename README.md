@@ -15,12 +15,12 @@ Both are thin layers over well-known open-source engines:
 | [qpdf](https://github.com/qpdf/qpdf) | merge, split, pages, rotate, passwords, metadata, compression (website: qpdf 12 compiled to WebAssembly; CLI: via [pikepdf](https://github.com/pikepdf/pikepdf)) |
 | [pdf.js](https://github.com/mozilla/pdf.js) (Mozilla) / [PDFium](https://pdfium.googlesource.com/pdfium/) (Google) | rendering pages, independent check of every output |
 | [libheif](https://github.com/strukturag/libheif) via [heic-to](https://github.com/hoppergee/heic-to) / [pillow-heif](https://github.com/bigcat88/pillow_heif) | iPhone HEIC photos |
-| [Fontsource](https://fontsource.org) fonts (Arimo, Dancing Script, Great Vibes, Homemade Apple) | text preview and typed signatures |
+| [Fontsource](https://fontsource.org) fonts (Arimo, Tinos, Cousine, Dancing Script, Great Vibes, Homemade Apple) | text preview and typed signatures |
 | The browser's own image codecs / [Pillow](https://python-pillow.org) | JPG, PNG, WEBP |
 
 ## Website
 
-Tools: fill & sign, compress (including "get it under N MB"), merge, organize
+Tools: edit PDF, fill & sign, compress (including "get it under N MB"), merge, organize
 pages (reorder / rotate / delete with thumbnails), split, images to PDF, PDF to
 images, convert images (HEIC/PNG/WEBP/JPG, resize), add password (AES-256),
 remove password, remove hidden metadata, PDF info.
@@ -40,9 +40,35 @@ remove password, remove hidden metadata, PDF info.
 - Logic for the PDF changes is in `web/fill-core.js` (plain JS, testable in Node);
   the editor is `web/fill-sign.js`.
 
+### Edit PDF
+
+- Tap any line of text in a PDF to retype it, or clear it to delete it. "Erase"
+  removes everything inside a box you drag. Works in the same editor as Fill &
+  sign, so text, dates, marks and signatures can be added too.
+- The old text is really removed from the file, not just covered up:
+  `web/edit-core.js` drops exactly the text-drawing commands that start on that
+  line (using the fonts' own letter widths to find where each piece starts) and
+  keeps everything else on the page as it was.
+- New text goes in the closest standard font (Helvetica, Times or Courier, bold
+  or italic to match), in the original size, colour and position. The preview
+  uses Arimo, Tinos and Cousine, which have the same letter widths.
+- After saving, the page's text is read back with pdf.js and checked against
+  what should be left. If anything differs (unusual PDFs), that page is redone by
+  covering the old text with a box in the background colour instead.
+- Scanned PDFs have no text to edit: use Erase and then type new text on top.
+
+### Assistant (family only)
+
+`web/assistant.html` is a chat with Claude for people with an access code: it can
+explain photos or PDFs of letters and bills, write emails, spot scams and more.
+Unlike the PDF tools this page does send data (to Anthropic, through our own
+server); it says so on the page. Its server is a Cloudflare Worker in
+`assistant/` that holds the API key. Setup: [assistant/README.md](assistant/README.md).
+
 ### Why it's private
 
-- No server does any work. GitHub Pages only serves the static files.
+- No server does any work. GitHub Pages only serves the static files. (The
+  separate assistant page is the one exception, see above.)
 - The page's Content-Security-Policy (top of `web/index.html`) makes the browser
   refuse connections to any other site, so a bug can't upload a file either.
 - Every job runs in a fresh background worker that is destroyed afterwards.

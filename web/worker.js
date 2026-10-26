@@ -6,6 +6,7 @@
 
 importScripts("vendor/qpdf/qpdf.js"); // defines the global factory `Module`
 importScripts("fill-core.js"); // defines FillCore
+importScripts("edit-core.js"); // defines EditCore
 
 let wasmModule = null;
 
@@ -427,7 +428,74 @@ async function compress({ data, password, steps, targetBytes, lossless }) {
 // ---------------------------------------------------------- fill & sign ---
 
 // fieldChanges / pageItems come from the editor; see fill-core.js for details.
-async function fillSign({ data, password, fieldChanges, pageItems, flatten }) {
+// Text removal for "Edit text" and "Erase". edits: [{ pageIndex, removeText,
+// regions: [{ rect, color, cover: "always" | "auto" }] }]. Returns the pageEdits
+// for FillCore and, per page, which regions had their text removed.
+function prepareEdits(q, password, j, edits) {
+  const objects = j.qpdf[1];
+  const pageEdits = [];
+  const report = [];
+  if (edits.length) q.FS.mkdir("/cs");
+  for (const e of edits) {
+    const refs = FillCore.pageContentRefs(objects, j.pages[e.pageIndex].object);
+    let content = null;
+    if (e.removeText && refs.length) {
+      const prefix = `/cs/p${e.pageIndex}`;
+      const res = q.run([...pwArgs(password), "/in.pdf", "--json-output", "--json-key=qpdf",
+        ...refs.map((r) => `--json-object=${r.split(" ").slice(0, 2).join(",")}`), "--decode-level=generalized",
+        "--json-stream-data=file", `--json-stream-prefix=${prefix}`, `${prefix}.json`]);
+      if (res.rc === 0 || res.rc === 3) {
+        const got = JSON.parse(q.FS.readFile(`${prefix}.json`, { encoding: "utf8" })).qpdf[1];
+        const parts = refs.map((r) => got[`obj:${r}`]?.stream);
+        // a stream that kept a /Filter couldn't be decoded, so can't be edited
+        if (parts.every((p) => p?.datafile && !p.dict["/Filter"])) {
+          content = parts.map((p) => latin1(q.FS.readFile(p.datafile))).join("\n");
+        }
+      }
+    }
+    let removed = e.regions.map(() => false);
+    let invisible = removed;
+    let contentFile;
+    if (content != null) {
+      const r = EditCore.removeText(content, e.regions.map((g) => g.rect), pageFonts(objects, j.pages[e.pageIndex].object));
+      ({ removed, invisible } = r);
+      if (removed.some(Boolean)) {
+        contentFile = `/cs/new${e.pageIndex}`;
+        q.FS.writeFile(contentFile, fromLatin1(r.content));
+      }
+    }
+    const covers = e.regions.filter((g, k) => g.cover === "always" || !removed[k] || invisible[k])
+      .map((g) => ({ rect: g.coverRect || g.rect, color: g.color }));
+    pageEdits.push({ pageIndex: e.pageIndex, contentFile, covers });
+    report.push({ pageIndex: e.pageIndex, removed });
+  }
+  return { pageEdits, report };
+}
+
+// Character widths of the fonts a page uses (its resources may be inherited)
+function pageFonts(objects, pageRef) {
+  const res = (v) => resolve(objects, v);
+  let node = res(pageRef);
+  let resources = node?.["/Resources"];
+  for (let k = 0; resources === undefined && node && k < 50; k++) {
+    node = res(node["/Parent"]);
+    resources = node?.["/Resources"];
+  }
+  return EditCore.fontMetrics(res(res(resources)?.["/Font"]), res);
+}
+
+function latin1(bytes) {
+  let s = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return s;
+}
+function fromLatin1(s) {
+  const b = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) b[i] = s.charCodeAt(i);
+  return b;
+}
+
+async function fillSign({ data, password, fieldChanges, pageItems, edits = [], flatten }) {
   const q = await newQpdf();
   q.FS.writeFile("/in.pdf", data);
   progress("Reading the PDF…", 0.1);
@@ -453,9 +521,11 @@ async function fillSign({ data, password, fieldChanges, pageItems, flatten }) {
     }
   }
 
+  const { pageEdits, report } = prepareEdits(q, password, j, edits);
+
   let update;
   try {
-    update = FillCore.buildFillUpdate({ header: j.qpdf[0], objects: j.qpdf[1], pages: j.pages, fieldChanges, pageItems });
+    update = FillCore.buildFillUpdate({ header: j.qpdf[0], objects: j.qpdf[1], pages: j.pages, fieldChanges, pageItems, pageEdits });
   } catch (e) {
     if (e.userFacing) fail(e.message);
     throw e;
@@ -478,7 +548,7 @@ async function fillSign({ data, password, fieldChanges, pageItems, flatten }) {
   }
   progress("Checking the result…", 0.9);
   verify(q, "/out.pdf", password, j.pages.length);
-  return { files: [{ data: q.FS.readFile("/out.pdf") }] };
+  return { files: [{ data: q.FS.readFile("/out.pdf") }], report };
 }
 
 // ----------------------------------------------------------------- main ---
