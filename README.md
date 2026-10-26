@@ -42,6 +42,20 @@ remove password, remove hidden metadata, PDF info.
 
 ### Edit PDF
 
+Two ways to edit, switched at the top of the tool:
+
+**Document** (`web/doc-edit.js`): the PDF opens as an ordinary editable
+document. Text reflows as you type, and you can make text bold, italic,
+underlined, bigger or coloured, and align it. Paragraphs, headings, fonts,
+colours, superscripts, bullets, right-aligned dates and pictures (with their
+labels) are rebuilt from the PDF. Saving lays the document out into pages again
+and writes a new PDF in the standard fonts. Because the editor's fonts have the
+same letter widths as those, every word lands where it was on screen. Dashed
+lines show where pages will break. Very complex layouts (columns, tables) are
+simplified, so use Exact layout for those.
+
+**Exact layout** (the Fill & sign editor):
+
 - Tap any line of text in a PDF to retype it, or clear it to delete it. "Erase"
   removes everything inside a box you drag. Works in the same editor as Fill &
   sign, so text, dates, marks and signatures can be added too.

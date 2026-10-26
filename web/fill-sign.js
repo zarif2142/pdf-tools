@@ -7,6 +7,7 @@
 // user sees. fill-core.js converts them to PDF coordinates when saving.
 
 import { canvasToPdfImage } from "./images.js";
+import { mulM, invertM, toTypeable, standardFont, sampleColors } from "./page-text.js";
 
 const LINE_HEIGHT = 1.2; // must match fill-core.js
 const FIRST_BASELINE = 0.9465; // likewise
@@ -53,17 +54,6 @@ function toViewBox(m, [x1, y1, x2, y2]) {
   return { x, y, w: Math.max(...xs) - x, h: Math.max(...ys) - y };
 }
 
-// [a b c d e f] maps (x, y) -> (a x + c y + e, b x + d y + f)
-const mulM = (A, B) => [ // apply A, then B
-  A[0] * B[0] + A[1] * B[2], A[0] * B[1] + A[1] * B[3],
-  A[2] * B[0] + A[3] * B[2], A[2] * B[1] + A[3] * B[3],
-  A[4] * B[0] + A[5] * B[2] + B[4], A[4] * B[1] + A[5] * B[3] + B[5],
-];
-function invertM(m) {
-  const det = m[0] * m[3] - m[1] * m[2];
-  return [m[3] / det, -m[1] / det, -m[2] / det, m[0] / det,
-    (m[2] * m[5] - m[3] * m[4]) / det, (m[1] * m[4] - m[0] * m[5]) / det];
-}
 // box in page units -> PDF rectangle [x1 y1 x2 y2], via the inverse page transform
 function pdfRect(inv, { x, y, w, h }) {
   const pts = [[x, y], [x + w, y], [x, y + h], [x + w, y + h]].map(([px, py]) => [inv[0] * px + inv[2] * py + inv[4], inv[1] * px + inv[3] * py + inv[5]]);
@@ -71,14 +61,6 @@ function pdfRect(inv, { x, y, w, h }) {
   return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
 }
 const normText = (s) => s.normalize("NFKC").replace(/\s+/gu, "");
-
-// Retyped text uses the standard PDF fonts, which can show Latin letters and
-// common symbols (WinAnsi). Ligatures are split ("ﬁ" -> "fi"), curly quotes and
-// dashes kept, and anything else (icon fonts, other scripts) left out.
-const WIN_ANSI_EXTRA = new Set("€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ");
-const typeable = (ch) => { const c = ch.codePointAt(0); return (c >= 0x20 && c <= 0x7e) || (c >= 0xa0 && c <= 0xff) || WIN_ANSI_EXTRA.has(ch); };
-const toTypeable = (s) => [...s].map((ch) => (typeable(ch) ? ch : [...ch.normalize("NFKC")].every(typeable) ? ch.normalize("NFKC") : ""))
-  .join("").replace(/ {2,}/g, " ").trim();
 
 function createEditor(it, ctx) {
   const { h } = ctx;
@@ -475,7 +457,7 @@ function createEditor(it, ctx) {
     for (const l of p.lines) l.text = toTypeable(l.text);
     p.lines = p.lines.filter((l) => l.text); // e.g. a line of icons only
     for (const l of p.lines) {
-      l.font = lineFont(p, tc.styles[l.fontName], l.fontName);
+      l.font = standardFont(p.page, tc.styles[l.fontName], l.fontName);
       // box covering the letters on screen (also drawn over them if needed)
       l.box = { x: l.x0 - 0.5, y: l.baseline - 0.95 * l.size, w: l.x1 - l.x0 + 1, h: 1.22 * l.size };
       l.coverRect = pdfRect(inv, l.box);
@@ -498,65 +480,11 @@ function createEditor(it, ctx) {
     if (l.mask) place(l.mask, l.page, l.box);
   }
 
-  // The closest standard font: Helvetica, Times or Courier, bold and/or italic
-  function lineFont(p, style, id) {
-    let f = null;
-    try { f = p.page.commonObjs.has(id) ? p.page.commonObjs.get(id) : null; } catch { /* not loaded */ }
-    const name = String(f?.name || "").replace(/^[A-Z]{6}\+/, "");
-    const mono = f?.isMonospace || /courier|mono|consol/i.test(name) || style?.fontFamily === "monospace";
-    const serif = !mono && !/sans|arial|helvet|calibri|verdana/i.test(name) &&
-      (f?.isSerifFont || /times|serif|georgia|garamond|cambria|roman|minion|palatino|book/i.test(name) || style?.fontFamily === "serif");
-    const bold = !!(f?.bold || f?.black) || /bold|black|heavy|semibold|demi/i.test(name);
-    const italic = !!f?.italic || /italic|oblique/i.test(name);
-    const family = mono ? "Courier" : serif ? "Times" : "Helvetica";
-    const slant = family === "Times" ? "Italic" : "Oblique";
-    const std = family === "Times"
-      ? `Times-${bold && italic ? "BoldItalic" : bold ? "Bold" : italic ? "Italic" : "Roman"}`
-      : `${family}${bold || italic ? "-" : ""}${bold ? "Bold" : ""}${italic ? slant : ""}`;
-    return { std, css: `PDF ${family}`, bold, italic };
-  }
-
-  // Colours under a box on the drawn page: the background (most common colour
-  // around its edge) and, for text, the ink (the pixels least like it).
-  function sampleColors(p, box) {
-    const c = p.canvas;
-    const k = c.width / p.vp1.width;
-    const x = Math.max(0, Math.floor(box.x * k) - 2), y = Math.max(0, Math.floor(box.y * k) - 2);
-    const w = Math.min(c.width - x, Math.ceil(box.w * k) + 4), hh = Math.min(c.height - y, Math.ceil(box.h * k) + 4);
-    if (w < 3 || hh < 3) return { bg: [1, 1, 1], ink: [0, 0, 0] };
-    const px = c.getContext("2d", { willReadFrequently: true }).getImageData(x, y, w, hh).data;
-    const at = (i, j) => { const o = (j * w + i) * 4; return [px[o], px[o + 1], px[o + 2]]; };
-    const counts = new Map();
-    const edge = [];
-    for (let i = 0; i < w; i++) edge.push(at(i, 0), at(i, hh - 1));
-    for (let j = 0; j < hh; j++) edge.push(at(0, j), at(w - 1, j));
-    for (const q of edge) {
-      const key = q.map((v) => v >> 3).join();
-      const e = counts.get(key) || { n: 0, sum: [0, 0, 0] };
-      e.n++; e.sum = e.sum.map((v, i) => v + q[i]);
-      counts.set(key, e);
-    }
-    const top = [...counts.values()].sort((a, b) => b.n - a.n)[0];
-    const bg = top.sum.map((v) => v / top.n);
-    const dist = (q) => Math.hypot(q[0] - bg[0], q[1] - bg[1], q[2] - bg[2]);
-    let max = 0;
-    const inner = [];
-    for (let j = 2; j < hh - 2; j++) for (let i = 2; i < w - 2; i++) { const q = at(i, j); inner.push(q); max = Math.max(max, dist(q)); }
-    const inkPx = inner.filter((q) => dist(q) > 0.8 * max);
-    const ink = max > 40 && inkPx.length
-      ? [0, 1, 2].map((i) => inkPx.reduce((a, q) => a + q[i], 0) / inkPx.length)
-      : [0, 0, 0];
-    const unit = (v) => v.map((x) => Math.round(x / 255 * 1000) / 1000);
-    // edge smoothing lightens thin letters a little: near-black is black
-    const grey = Math.max(...ink) - Math.min(...ink) < 20;
-    return { bg: unit(bg), ink: max > 40 && !(grey && Math.max(...ink) < 60) ? unit(ink) : [0, 0, 0] };
-  }
-
   function startEdit(l) {
     if (l.edit?.item) { focusEnd(l.edit.item); return; }
     const p = l.page;
     measure(p);
-    if (!l.colors) l.colors = sampleColors(p, l.box);
+    if (!l.colors) l.colors = sampleColors(p.canvas, p.canvas.width / p.vp1.width, l.box);
     if (!l.edit) {
       l.mask = h("div", { class: "text-mask" });
       l.mask.style.background = cssColor(l.colors.bg);
@@ -621,7 +549,7 @@ function createEditor(it, ctx) {
       p.wrap.removeEventListener("pointercancel", up);
       swallowClick = ev.type === "pointerup"; // the click that ends this drag
       if (item.w < 4 || item.h < 4) Object.assign(item, { x: x0 - 40, y: y0 - 8, w: 80, h: 16 }); // a tap
-      item.color = sampleColors(p, item).bg;
+      item.color = sampleColors(p.canvas, p.canvas.width / p.vp1.width, item).bg;
       layoutItem(item);
     };
     p.wrap.addEventListener("pointermove", move);

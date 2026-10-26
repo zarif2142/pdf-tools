@@ -6,6 +6,7 @@ import { imagesToPdf } from "./images-to-pdf.js";
 import { convertImage, OUTPUT_TYPES } from "./images.js";
 import { makeZip } from "./zip.js";
 import { fillSignView, disposeFillSign } from "./fill-sign.js";
+import { docEditView, disposeDocEdit } from "./doc-edit.js";
 
 // ------------------------------------------------------------- helpers ---
 
@@ -98,6 +99,7 @@ async function openPdfjs(data, password) {
     password: password || undefined,
     isEvalSupported: false,
     enableXfa: false,
+    fontExtraProperties: true, // font names and bold/italic, for matching fonts when editing text
     cMapUrl: "vendor/pdfjs/cmaps/",
     standardFontDataUrl: "vendor/pdfjs/standard_fonts/",
     wasmUrl: "vendor/pdfjs/wasm/",
@@ -143,7 +145,7 @@ const icon = (name) => h("span", { class: "icon", "aria-hidden": "true",
   html: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${ICONS[name]}</svg>` });
 
 const TOOLS = [
-  { id: "edit", title: "Edit PDF", blurb: "Change or delete the text already in a PDF, or erase parts of it.", kind: "pdf" },
+  { id: "edit", title: "Edit PDF", blurb: "Edit a PDF's text like a document, then save it as a PDF again.", kind: "pdf" },
   { id: "sign", title: "Fill & sign", blurb: "Fill in forms, add a signature, text, dates and check marks.", kind: "pdf" },
   { id: "compress", title: "Compress PDF", blurb: "Make a PDF smaller, e.g. to fit an upload limit.", kind: "pdf" },
   { id: "merge", title: "Merge PDFs", blurb: "Combine several PDFs into one, in the order you choose.", kind: "pdf", multiple: true },
@@ -175,6 +177,7 @@ function resetState() {
   thumbDoc = null;
   thumbCache = new Map();
   disposeFillSign();
+  disposeDocEdit();
   items = [];
   opts = {};
   busy = false;
@@ -407,7 +410,7 @@ function optionsFor() {
   const one = readyItems()[0];
   switch (tool.id) {
     case "sign": return fillSignView(one, signCtx);
-    case "edit": return fillSignView(one, editCtx);
+    case "edit": return editView(one);
     case "compress": return compressOptions(one);
     case "merge": return mergeOptions();
     case "organize": return organizeOptions(one);
@@ -428,6 +431,20 @@ function optionsFor() {
 const signCtx = { h, job, openPdfjs, pdfjs, setStatus, doubleCheck, stem, guard,
   showResults: (...a) => showResults(...a), isBusy: () => busy };
 const editCtx = { ...signCtx, mode: "edit" };
+
+// Edit PDF: as a reflowing document (doc-edit.js), or with the exact layout kept
+// and lines retyped in place (fill-sign.js, better for forms)
+let editMode = "doc";
+function editView(one) {
+  const modes = [["doc", "Document"], ["exact", "Exact layout"]];
+  const tabs = h("div", { class: "mode-switch", role: "tablist", "aria-label": "How to edit" }, modes.map(([k, label]) =>
+    h("button", { type: "button", role: "tab", "aria-selected": String(editMode === k),
+      onclick: () => { editMode = k; refresh(); } }, label)));
+  const note = h("p", { class: "hint mode-note" }, editMode === "doc"
+    ? "Edit freely: text flows onto the next line and page as you type. The pages are laid out again when you save."
+    : "Keeps every page exactly as it is: tap a line to retype it, or erase parts. Best for forms and letters.");
+  return [tabs, note, ...(editMode === "doc" ? docEditView(one, signCtx) : fillSignView(one, editCtx))];
+}
 
 // --- compress
 

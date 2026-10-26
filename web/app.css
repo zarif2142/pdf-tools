@@ -631,3 +631,44 @@ table.info td { overflow-wrap: anywhere; }
   .sign-footer .hint { display: none; }
   .sign-footer .btn.primary { flex: none; }
 }
+
+/* ------------------------------------------------------- edit as document */
+
+.mode-switch { display: inline-flex; gap: 4px; padding: 4px; border-radius: 12px; background: var(--surface-2); }
+.mode-switch button {
+  font: inherit; font-size: 15px; font-weight: 600; padding: 8px 16px; border: 0; border-radius: 9px;
+  background: transparent; color: var(--muted); cursor: pointer;
+}
+.mode-switch button[aria-selected="true"] { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
+.mode-note { margin: 8px 0 12px; }
+
+.doc-toolbar select { min-height: 38px; }
+.doc-toolbar .icon-btn.swatch { width: 30px; height: 30px; min-width: 0; padding: 0; border-radius: 50%; }
+.doc-toolbar .swatch.red { background: #b3261e; }
+
+/* the page is laid out in points (1px = 1pt) and scaled to fit the screen */
+.doc-frame { position: relative; width: 100%; max-width: 980px; margin: 0 auto; overflow: hidden; }
+.doc-scaler { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+.doc-sheet {
+  background: #fff;
+  color: #000;
+  box-shadow: 0 0 0 1px var(--line), var(--shadow);
+  font-family: "PDF Times", "Times New Roman", serif;
+  font-size: 12px;
+  line-height: 1.2;
+  outline: none;
+  overflow-wrap: break-word;
+  caret-color: #2f5bd3;
+}
+.doc-sheet p { margin: 0; min-height: 1em; }
+.doc-sheet figure { margin: 0; }
+.doc-sheet img { max-width: 100%; display: inline-block; vertical-align: top; }
+.doc-sheet figure:focus-within img, .doc-sheet img:hover { outline: 2px solid rgba(47, 91, 211, .5); }
+.doc-breaks { position: absolute; inset: 0; pointer-events: none; }
+.doc-break { position: absolute; left: 0; right: 0; border-top: 1.5px dashed rgba(47, 91, 211, .55); }
+.doc-break span {
+  position: absolute; right: 6px; top: -9px; font: 600 9px system-ui, sans-serif; color: #2f5bd3;
+  background: #fff; padding: 1px 5px; border-radius: 4px;
+}
+.doc-editor .sign-footer { justify-content: space-between; align-items: center; }
+.tb-icon, .tb-icon svg { display: block; }

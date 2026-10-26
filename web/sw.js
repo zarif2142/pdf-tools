@@ -18,6 +18,8 @@ const CORE = [
   "fill-core.js",
   "edit-core.js",
   "fill-sign.js",
+  "doc-edit.js",
+  "page-text.js",
   "manifest.webmanifest",
   "icon.svg",
   "icon-192.png",
