@@ -16,7 +16,11 @@
 import { mulM, standardFont, sampleColors, keepTypeable, winAnsiCode, stdName } from "./page-text.js";
 import { deflate } from "./images.js";
 
-const SCALE = 2; // pages are drawn at 2x (144 dpi) for cutting out pictures
+const SCALE = 2; // pages are drawn at 2x (144 dpi) for cutting out pictures...
+// ...but never bigger than this. iPhones refuse canvases over ~16.7 megapixels,
+// and PDFs made on a phone often have huge pages (3024 x 4032 points, the size
+// of the photo), which at 2x would be 49 megapixels.
+const MAX_PIXELS = 8e6;
 const ASCENT = 0.905, DESCENT = 0.212; // must match the @font-face overrides in app.css
 const BULLET_RE = /^\s*([•●▪◦‣■□➢➤✓-]|\(?\d{1,2}[.)]|\(?[a-z][.)])\s/;
 const PAGE_NUMBER_RE = /^(page\s*)?\d{1,4}(\s*(of|\/)\s*\d{1,4})?$/i;
@@ -87,7 +91,7 @@ function findImages(ops, OPS, vpT) {
 // Splits a piece of text into words with their colours. Word positions are
 // estimated with the matching font (same letter widths), scaled to the piece.
 const measurer = document.createElement("canvas").getContext("2d");
-function wordColors(str, font, x, width, base, size, canvas, pixels) {
+function wordColors(str, font, x, width, base, size, canvas, scale, pixels) {
   measurer.font = `${font.italic ? "italic " : ""}${font.bold ? 700 : 400} 100px "${FAMILIES[font.family]}"`;
   const k = width / (measurer.measureText(str).width || 1);
   const out = [];
@@ -95,7 +99,7 @@ function wordColors(str, font, x, width, base, size, canvas, pixels) {
   for (const m of str.matchAll(/\S+\s*/g)) {
     const x0 = x + measurer.measureText(str.slice(0, m.index)).width * k;
     const w = measurer.measureText(m[0].trimEnd()).width * k;
-    const color = sampleColors(canvas, SCALE, { x: x0, y: base - 0.8 * size, w, h: 0.95 * size }, pixels).ink;
+    const color = sampleColors(canvas, scale, { x: x0, y: base - 0.8 * size, w, h: 0.95 * size }, pixels).ink;
     const prev = out[out.length - 1];
     if (prev && prev.color.every((v, i) => Math.abs(v - color[i]) < 0.08)) prev.text += m[0];
     else out.push({ text: m[0], color });
@@ -116,13 +120,15 @@ async function loadFonts() {
 // One page -> { w, h, lines, images }. Lines: { x0, x1, baseline, size, runs }.
 async function readPage(page, lib) {
   const vp = page.getViewport({ scale: 1 });
+  const scale = Math.min(SCALE, Math.sqrt(MAX_PIXELS / (vp.width * vp.height)));
   const canvas = document.createElement("canvas");
-  canvas.width = Math.ceil(vp.width * SCALE);
-  canvas.height = Math.ceil(vp.height * SCALE);
+  canvas.width = Math.ceil(vp.width * scale);
+  canvas.height = Math.ceil(vp.height * scale);
   const g = canvas.getContext("2d", { willReadFrequently: true });
+  if (!g) throw new Error("this device ran out of memory for drawing pages");
   g.fillStyle = "#fff";
   g.fillRect(0, 0, canvas.width, canvas.height);
-  await page.render({ canvas, canvasContext: g, viewport: page.getViewport({ scale: SCALE }), intent: "print" }).promise;
+  await page.render({ canvas, canvasContext: g, viewport: page.getViewport({ scale }), intent: "print" }).promise;
   const ops = await page.getOperatorList({ intent: "print" });
   const tc = await page.getTextContent();
 
@@ -169,7 +175,7 @@ async function readPage(page, lib) {
     const font = standardFont(page, tc.styles[it.fontName], it.fontName);
     // one piece of text can hold words in different colours (links, highlights),
     // so each word's colour is read from the drawn page
-    for (const wd of wordColors(it.str, font, x, it.width, base, size, canvas, pixels)) {
+    for (const wd of wordColors(it.str, font, x, it.width, base, size, canvas, scale, pixels)) {
       cur.runs.push({ text: keepTypeable(wd.text), family: font.family, bold: font.bold, italic: font.italic, size, color: wd.color, shift });
     }
     if (!shift) cur.size = Math.max(cur.size, size);
@@ -195,10 +201,13 @@ async function readPage(page, lib) {
   const pics = [];
   for (const b of images) {
     const c = document.createElement("canvas");
-    c.width = Math.max(1, Math.round(b.w * SCALE));
-    c.height = Math.max(1, Math.round(b.h * SCALE));
-    c.getContext("2d").drawImage(canvas, b.x * SCALE, b.y * SCALE, b.w * SCALE, b.h * SCALE, 0, 0, c.width, c.height);
+    c.width = Math.max(1, Math.round(b.w * scale));
+    c.height = Math.max(1, Math.round(b.h * scale));
+    const cg = c.getContext("2d");
+    if (!cg) continue; // a picture that can't be cut out is left out, not the whole PDF
+    cg.drawImage(canvas, b.x * scale, b.y * scale, b.w * scale, b.h * scale, 0, 0, c.width, c.height);
     pics.push({ ...b, src: c.toDataURL("image/jpeg", 0.9) });
+    c.width = c.height = 0; // iPhones count canvas memory until it's released
   }
   canvas.width = canvas.height = 0; // free the memory now
   return { w: vp.width, h: vp.height, lines: kept, images: pics };
@@ -460,7 +469,7 @@ function createDocEditor(it, ctx) {
       hint.textContent = "Select text to make it bold, bigger or a different colour. Pictures can be deleted, not moved.";
     } catch (e) {
       console.error(e);
-      hint.textContent = "This PDF couldn't be read.";
+      hint.textContent = `This PDF couldn't be read${e?.message ? ` (${e.message})` : ""}. Exact layout may still work.`;
     }
   }
 
