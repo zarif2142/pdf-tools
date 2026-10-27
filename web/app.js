@@ -31,6 +31,17 @@ function fmtSize(n) {
 }
 
 const stem = (name) => name.replace(/\.[^.]+$/, "");
+
+// A file name people typed, made safe for every system: no slashes, colons or
+// other characters Windows, macOS or iOS Files reject. Without the extension.
+function cleanName(text, fallback) {
+  const s = text.replace(/[\\/:*?"<>|\u0000-\u001f]+/g, " ").replace(/\s+/g, " ").trim()
+    .replace(/^\.+|\.+$/g, "").slice(0, 120).trim();
+  return s || fallback;
+}
+
+// iPhones and iPads (iPadOS reports itself as a Mac with a touch screen)
+const IOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 const isPdf = (f) => f.type === "application/pdf" || /\.pdf$/i.test(f.name);
 
 // Page ranges like "1-3, 5, 8-end". Returns [[from, to], ...] (1-based, inclusive).
@@ -173,6 +184,7 @@ let nextId = 1;
 function resetState() {
   urls.forEach((u) => URL.revokeObjectURL(u));
   urls = [];
+  clearViews();
   if (thumbDoc) thumbDoc.doc.then((d) => d.close()).catch(() => {});
   thumbDoc = null;
   thumbCache = new Map();
@@ -840,8 +852,16 @@ async function runPdf2img(it) {
 
 function img2pdfOptions() {
   opts.size ??= "fit";
+  const suggested = items.length === 1 ? stem(items[0].file.name) : "Scanned document";
   return [
     h("p", { class: "hint" }, "One image per page, top to bottom. Use the arrows to change the order."),
+    field("File name", h("span", { class: "name-row" },
+      h("input", { type: "text", class: "name-input", value: opts.name ?? "", placeholder: suggested,
+        autocomplete: "off", spellcheck: "false", enterkeyhint: "done",
+        oninput: (e) => (opts.name = e.target.value),
+        onkeydown: (e) => { if (e.key === "Enter") e.target.blur(); } }),
+      h("span", { class: "ext" }, ".pdf")),
+      "You can also change it after the PDF is made."),
     field("Page size", radios("size", [
       ["fit", "Same shape as each image", "No margins."],
       ["a4", "A4", "Image centered with a small margin."],
@@ -853,13 +873,14 @@ function img2pdfOptions() {
 
 async function runImg2pdf() {
   const files = items.map((i) => i.file);
-  const built = await imagesToPdf(files, opts.size, (t, f) => setStatus(t, f));
+  const title = cleanName(opts.name || "", files.length === 1 ? stem(files[0].name) : "Scanned document");
+  const built = await imagesToPdf(files, opts.size, (t, f) => setStatus(t, f), title);
   setStatus("Checking…", 1);
   const r = await job({ op: "runQpdf", inputs: [built.data], commands: [{
     args: ["/in0.pdf", "--object-streams=generate", "/out/x.pdf"], outputs: ["/out/x.pdf"], names: ["x"],
     expectPages: [built.pages], label: "Checking…" }] });
   await doubleCheck(r.files[0].data, null, built.pages);
-  const name = files.length === 1 ? `${stem(files[0].name)}.pdf` : "images.pdf";
+  const name = `${title}.pdf`;
   setStatus(`Done. ${built.pages} page${built.pages === 1 ? "" : "s"}.`, null, "ok");
   showResults([{ name, data: r.files[0].data, type: "application/pdf" }]);
 }
@@ -927,17 +948,65 @@ function showResults(files, zipName) {
   box.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
+// The name can be changed here; Open, Share and Download all use it. On an
+// iPhone the share sheet ("Save to Files") is the reliable way to keep the name,
+// so it's the main button there.
 function resultCard(e, meta, primary) {
-  const file = new File([e.blob], e.name, { type: e.type });
+  const ext = e.name.match(/\.[^.]+$/)?.[0] || "";
+  let file = new File([e.blob], e.name, { type: e.type });
   const canShare = navigator.canShare?.({ files: [file] });
+  const shareFirst = IOS && canShare;
   const viewable = e.type !== "application/zip";
+
+  const open = viewable && h("a", { class: "btn small ghost", href: e.url, target: "_blank", rel: "noopener" }, "Open");
+  const download = h("a", { class: `btn small ${primary && !shareFirst ? "primary" : "ghost"}`, href: e.url, download: e.name }, "Download");
+  const share = canShare && h("button", { type: "button", class: `btn small ${primary && shareFirst ? "primary" : "ghost"}`,
+    onclick: () => navigator.share({ files: [file] }).catch(() => {}) }, shareFirst ? "Save to Files" : "Share");
+
+  const rename = () => {
+    e.name = cleanName(input.value, stem(e.name)) + ext;
+    file = new File([e.blob], e.name, { type: e.type });
+    download.download = e.name;
+    if (open) viewUrl(e).then((u) => (open.href = u));
+  };
+  const input = h("input", { type: "text", class: "name-input", value: stem(e.name), "aria-label": "File name",
+    autocomplete: "off", spellcheck: "false", enterkeyhint: "done", oninput: rename,
+    onkeydown: (ev) => { if (ev.key === "Enter") input.blur(); },
+    onblur: () => { input.value = stem(e.name); } });
+  if (open) viewUrl(e).then((u) => (open.href = u));
+
   return h("div", { class: `result ${primary ? "primary" : ""}` },
-    h("div", { class: "file-main" }, h("span", { class: "file-name" }, e.name), h("span", { class: "file-meta" }, meta)),
-    h("div", { class: "result-actions" },
-      viewable && h("a", { class: "btn small ghost", href: e.url, target: "_blank", rel: "noopener" }, "Open"),
-      canShare && h("button", { type: "button", class: "btn small ghost",
-        onclick: () => navigator.share({ files: [file] }).catch(() => {}) }, "Share"),
-      h("a", { class: `btn small ${primary ? "primary" : ""}`, href: e.url, download: e.name }, "Download")));
+    h("div", { class: "file-main" },
+      h("span", { class: "name-row" }, input, h("span", { class: "ext" }, ext)),
+      h("span", { class: "file-meta" }, meta)),
+    h("div", { class: "result-actions" }, open, share, download));
+}
+
+// "Open" on a blob: address loses the file name on iPhones (saving from
+// Safari's viewer gives "Unknown.pdf"). So, when the service worker is running,
+// the file is put in a cache and opened at view/<id>/<name>, which sw.js serves.
+const VIEWS = "pdftools-views";
+
+async function viewUrl(e) {
+  if (!navigator.serviceWorker?.controller || !("caches" in window)) return e.url;
+  try {
+    e.viewId ??= crypto.randomUUID().slice(0, 8);
+    const url = new URL(`view/${e.viewId}/${encodeURIComponent(e.name)}`, location.href).href;
+    const cache = await caches.open(VIEWS);
+    if (e.viewUrl && e.viewUrl !== url) await cache.delete(e.viewUrl);
+    await cache.put(url, new Response(e.blob, { headers: {
+      "Content-Type": e.type,
+      "Content-Disposition": `inline; filename*=UTF-8''${encodeURIComponent(e.name)}`,
+    } }));
+    e.viewUrl = url;
+    return url;
+  } catch {
+    return e.url;
+  }
+}
+
+function clearViews() {
+  if ("caches" in window) caches.delete(VIEWS).catch(() => {});
 }
 
 // ---------------------------------------------------------------- start ---
@@ -945,4 +1014,5 @@ function resultCard(e, meta, primary) {
 if ("serviceWorker" in navigator && location.protocol === "https:") {
   navigator.serviceWorker.register("sw.js").catch(() => {});
 }
+clearViews(); // files opened in an earlier visit
 route();

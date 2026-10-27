@@ -5,6 +5,7 @@
 
 const VERSION = "__BUILD__";
 const CACHE = `pdftools-${VERSION}`;
+const VIEWS = "pdftools-views"; // results opened with "Open" (see viewUrl in app.js)
 
 const CORE = [
   "./",
@@ -55,7 +56,7 @@ self.addEventListener("install", (e) => {
 self.addEventListener("activate", (e) => {
   e.waitUntil(
     caches.keys()
-      .then((keys) => Promise.all(keys.filter((k) => k.startsWith("pdftools-") && k !== CACHE).map((k) => caches.delete(k))))
+      .then((keys) => Promise.all(keys.filter((k) => k.startsWith("pdftools-") && k !== CACHE && k !== VIEWS).map((k) => caches.delete(k))))
       .then(() => self.clients.claim()),
   );
 });
@@ -65,6 +66,13 @@ self.addEventListener("activate", (e) => {
 self.addEventListener("fetch", (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== "GET" || url.origin !== location.origin) return;
+  // a result opened from the page, at an address ending in its file name, so
+  // saving it from the browser's PDF viewer keeps that name
+  if (url.pathname.includes("/view/")) {
+    e.respondWith(caches.open(VIEWS).then((c) => c.match(url.href)).then((hit) => hit ||
+      new Response("This file is no longer here. Make it again in PDF Tools.", { status: 404, headers: { "Content-Type": "text/plain" } })));
+    return;
+  }
   e.respondWith(
     caches.open(CACHE).then(async (cache) => {
       const hit = await cache.match(e.request, { ignoreSearch: true });

@@ -218,6 +218,12 @@ main { flex: 1; padding-bottom: 32px; }
 .file.error .file-meta { color: var(--err); }
 .file-actions, .result-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 
+/* a file name you can change, with its extension after it */
+.name-row { display: flex; align-items: center; gap: 4px; min-width: 0; width: min(100%, 420px); }
+.name-row .name-input { flex: 1; min-width: 0; font-weight: 550; font-size: max(16px, 1em); /* 16px+: iPhones don't zoom in */ }
+.result .name-input { min-height: 38px; padding: 6px 8px; }
+.name-row .ext { color: var(--muted); }
+
 .pw-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; width: 100%; }
 .pw-row input { flex: 1 1 160px; }
 

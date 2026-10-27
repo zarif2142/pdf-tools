@@ -161,7 +161,15 @@ function layout(img, pageSize) {
 
 const num = (n) => (Math.round(n * 1000) / 1000).toString();
 
-export async function imagesToPdf(files, pageSize, onProgress) {
+// A PDF text string: UTF-16BE with a byte order mark, as hex
+const pdfText = (s) => "<FEFF" + [...s].map((c) => {
+  const u = c.codePointAt(0);
+  const units = u > 0xffff ? [0xd800 + ((u - 0x10000) >> 10), 0xdc00 + ((u - 0x10000) & 0x3ff)] : [u];
+  return units.map((n) => n.toString(16).padStart(4, "0")).join("");
+}).join("").toUpperCase() + ">";
+
+// title: saved as the document title (searchable in Files and Finder), when given
+export async function imagesToPdf(files, pageSize, onProgress, title) {
   const chunks = [];
   let offset = 0;
   const offsets = [];
@@ -202,11 +210,13 @@ export async function imagesToPdf(files, pageSize, onProgress) {
   }
   obj(1, "<< /Type /Catalog /Pages 2 0 R >>");
   obj(2, `<< /Type /Pages /Kids [${pageIds.map((p) => `${p} 0 R`).join(" ")}] /Count ${pageIds.length} >>`);
+  const infoId = title ? nextId++ : 0;
+  if (title) obj(infoId, `<< /Title ${pdfText(title)} >>`);
 
   const xref = offset;
   let x = `xref\n0 ${nextId}\n0000000000 65535 f \n`;
   for (let id = 1; id < nextId; id++) x += `${String(offsets[id]).padStart(10, "0")} 00000 n \n`;
-  push(x + `trailer\n<< /Size ${nextId} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
+  push(x + `trailer\n<< /Size ${nextId} /Root 1 0 R${title ? ` /Info ${infoId} 0 R` : ""} >>\nstartxref\n${xref}\n%%EOF\n`);
 
   const out = new Uint8Array(offset);
   let o = 0;

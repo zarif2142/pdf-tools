@@ -25,6 +25,11 @@ pages (reorder / rotate / delete with thumbnails), split, images to PDF, PDF to
 images, convert images (HEIC/PNG/WEBP/JPG, resize), add password (AES-256),
 remove password, remove hidden metadata, PDF info.
 
+**Saving results:**
+- Every result can be renamed before saving. Images to PDF also asks for a name up front.
+- On an iPhone, **Save to Files** opens the share sheet, which keeps the name.
+- **Open** shows the file at an address ending in its name, so saving it from the browser's PDF viewer keeps the name too.
+
 ### Fill & sign
 
 - Fills the PDF's own form fields (text, multi-line, checkboxes, radio buttons,
